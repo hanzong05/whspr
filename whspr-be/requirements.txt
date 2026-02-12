@@ -1,0 +1,25 @@
+# FastAPI & Server
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Machine Learning (3.13 compatible)
+scikit-learn>=1.7.0
+numpy>=2.0
+pandas>=2.2
+
+# Audio Processing
+librosa>=0.10.2
+soundfile>=0.12.1
+
+# Whisper ASR
+openai-whisper
+torch
+torchaudio
+
+# Visualization
+matplotlib>=3.9
+seaborn>=0.13
+
+# Utilities
+python-dotenv>=1.0.0
