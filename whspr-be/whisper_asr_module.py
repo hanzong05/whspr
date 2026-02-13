@@ -1,4 +1,5 @@
 """
+//whisper_asr_module.py
 CSR Call Recording - Whisper ASR Transcription Module
 Converts call recordings to text with timestamps and metadata
 """
@@ -13,10 +14,11 @@ from pathlib import Path
 try:
     import whisper
     import torch
+    WHISPER_AVAILABLE = True
 except ImportError:
-    print("Error: Required packages not installed.")
-    print("Install with: pip install openai-whisper torch")
-    sys.exit(1)
+    WHISPER_AVAILABLE = False
+    whisper = None
+    torch = None
 
 warnings.filterwarnings('ignore')
 
