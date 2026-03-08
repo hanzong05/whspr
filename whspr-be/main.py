@@ -134,17 +134,23 @@ def initialize_models():
         from ml_classifier import EmotionClassifier as _EC
         emotion_classifier = _EC()
         modules_status["emotion_classifier"] = True
-        model_path = MODELS_DIR / "svm_emotion_model.pkl"
-        if not model_path.exists() and supabase_client:
+        if supabase_client:
             try:
-                print("⬇️  Downloading svm_emotion_model.pkl from Supabase Storage…")
+                import io, pickle
+                print("⬇️  Loading svm_emotion_model.pkl from Supabase Storage…")
                 res = supabase_client.storage.from_("models").download("svm_emotion_model.pkl")
-                model_path.write_bytes(res)
-                print("✅  Model downloaded successfully.")
+                model_data = pickle.load(io.BytesIO(res))
+                emotion_classifier.model = model_data["model"]
+                emotion_classifier.scaler = model_data["scaler"]
+                emotion_classifier.label_encoder = model_data["label_encoder"]
+                emotion_classifier.classifier_type = model_data["classifier_type"]
+                emotion_classifier.training_history = model_data["training_history"]
+                emotion_classifier.is_trained = model_data["is_trained"]
+                print("✅  Model loaded from Supabase Storage.")
             except Exception as dl_err:
-                print(f"⚠️  Could not download model from bucket: {dl_err}")
-        if model_path.exists():
-            emotion_classifier.load_model(str(model_path))
+                print(f"⚠️  Could not load model from Supabase: {dl_err}")
+        else:
+            print("⚠️  Supabase client not configured — emotion model not loaded.")
     except Exception:
         pass
 
