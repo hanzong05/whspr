@@ -1,4 +1,7 @@
-git add .gitignore
-git rm -r --cached whspr-be/ravdess_download
-git commit -m "ignore datasets"
-git push
+ravdess_download/
+*.zip
+training_data/
+outputs/
+__pycache__/
+*.pyc
+.env
