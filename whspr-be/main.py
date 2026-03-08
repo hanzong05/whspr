@@ -59,10 +59,8 @@ except Exception as _db_err:
     print(f"⚠️  Database not available: {_db_err}")
 
 # ============================================================================
-# ML MODULES (soft import — skipped when DISABLE_ML=true)
+# ML MODULES (soft import)
 # ============================================================================
-
-DISABLE_ML = os.getenv("DISABLE_ML", "false").lower() == "true"
 
 modules_status = {
     "whisper": False,
@@ -70,49 +68,43 @@ modules_status = {
     "emotion_classifier": False,
     "state_classifier": False,
     "recommendation_engine": False,
-    "ml_disabled": DISABLE_ML,
 }
 
 WhisperTranscriber = None
-if not DISABLE_ML:
-    try:
-        from whisper_asr_module import CSRCallTranscriber
-        WhisperTranscriber = CSRCallTranscriber
-        modules_status["whisper"] = True
-    except Exception:
-        pass
+try:
+    from whisper_asr_module import CSRCallTranscriber
+    WhisperTranscriber = CSRCallTranscriber
+    modules_status["whisper"] = True
+except Exception:
+    pass
 
 MFCCFeatureExtractor = None
-if not DISABLE_ML:
-    try:
-        from mfcc_feature_extraction import MFCCFeatureExtractor
-        modules_status["mfcc"] = True
-    except Exception:
-        pass
+try:
+    from mfcc_feature_extraction import MFCCFeatureExtractor
+    modules_status["mfcc"] = True
+except Exception:
+    pass
 
 EmotionClassifier = None
-if not DISABLE_ML:
-    try:
-        from ml_classifier import EmotionClassifier
-        modules_status["emotion_classifier"] = True
-    except Exception:
-        pass
+try:
+    from ml_classifier import EmotionClassifier
+    modules_status["emotion_classifier"] = True
+except Exception:
+    pass
 
 EmotionalStateClassifier = None
-if not DISABLE_ML:
-    try:
-        from emotional_state_classifier import EmotionalStateClassifier
-        modules_status["state_classifier"] = True
-    except Exception:
-        pass
+try:
+    from emotional_state_classifier import EmotionalStateClassifier
+    modules_status["state_classifier"] = True
+except Exception:
+    pass
 
 CSREmotionClassifier = None
-if not DISABLE_ML:
-    try:
-        from csr_emotion_recommendations import CSREmotionClassifier
-        modules_status["recommendation_engine"] = True
-    except Exception:
-        pass
+try:
+    from csr_emotion_recommendations import CSREmotionClassifier
+    modules_status["recommendation_engine"] = True
+except Exception:
+    pass
 
 # ============================================================================
 # APP
