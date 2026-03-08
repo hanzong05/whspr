@@ -6,7 +6,7 @@ FastAPI backend — ML pipeline + CRUD endpoints
 from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from typing import Optional
 import uvicorn
 import sys
@@ -17,6 +17,26 @@ from datetime import datetime, date
 import json
 import uuid as uuid_lib
 from sqlalchemy.orm import Session
+
+# ============================================================================
+# SUPABASE STORAGE (soft import)
+# ============================================================================
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv()
+except Exception:
+    pass
+
+supabase_client = None
+try:
+    from supabase import create_client
+    _supa_url = os.getenv("SUPABASE_URL")
+    _supa_key = os.getenv("SUPABASE_SERVICE_KEY")
+    if _supa_url and _supa_key and "YOUR-PROJECT" not in _supa_url:
+        supabase_client = create_client(_supa_url, _supa_key)
+except Exception:
+    pass
 
 # ============================================================================
 # PYTHON PATH
@@ -145,6 +165,14 @@ def initialize_models():
         try:
             emotion_classifier = EmotionClassifier()
             model_path = MODELS_DIR / "svm_emotion_model.pkl"
+            if not model_path.exists() and supabase_client:
+                try:
+                    print("⬇️  Downloading svm_emotion_model.pkl from Supabase Storage…")
+                    res = supabase_client.storage.from_("models").download("svm_emotion_model.pkl")
+                    model_path.write_bytes(res)
+                    print("✅  Model downloaded successfully.")
+                except Exception as dl_err:
+                    print(f"⚠️  Could not download model from bucket: {dl_err}")
             if model_path.exists():
                 emotion_classifier.load_model(str(model_path))
         except Exception:
@@ -464,6 +492,141 @@ class CallUpdate(BaseModel):
     agent_id: Optional[int] = None
     call_date: Optional[date] = None
     upload_status: Optional[str] = None
+
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    role: Optional[str] = "agent"
+
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+# ============================================================================
+# USERS
+# ============================================================================
+
+def _hash_password(plain: str) -> str:
+    from passlib.context import CryptContext
+    return CryptContext(schemes=["bcrypt"], deprecated="auto").hash(plain)
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    from passlib.context import CryptContext
+    return CryptContext(schemes=["bcrypt"], deprecated="auto").verify(plain, hashed)
+
+
+@app.get("/users")
+def list_users(db: Session = Depends(get_db)):
+    users = db.query(models.User).all()
+    return [
+        {
+            "id": u.id,
+            "uuid": str(u.uuid),
+            "name": u.name,
+            "email": u.email,
+            "role": u.role,
+            "is_active": u.is_active,
+            "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+            "created_at": u.created_at.isoformat() if u.created_at else None,
+        }
+        for u in users
+    ]
+
+
+@app.get("/users/{user_id}")
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, detail="User not found")
+    return {
+        "id": u.id,
+        "uuid": str(u.uuid),
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "is_active": u.is_active,
+        "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+@app.post("/users", status_code=201)
+def create_user(payload: UserCreate, db: Session = Depends(get_db)):
+    if db.query(models.User).filter(models.User.email == payload.email).first():
+        raise HTTPException(400, detail="Email already in use")
+    if payload.role not in ("agent", "supervisor"):
+        raise HTTPException(400, detail="role must be 'agent' or 'supervisor'")
+    u = models.User(
+        name=payload.name,
+        email=payload.email,
+        password_hash=_hash_password(payload.password),
+        role=payload.role,
+    )
+    db.add(u); db.commit(); db.refresh(u)
+    return {
+        "id": u.id,
+        "uuid": str(u.uuid),
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "is_active": u.is_active,
+        "created_at": u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+@app.put("/users/{user_id}")
+def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, detail="User not found")
+    data = payload.model_dump(exclude_none=True)
+    if "password" in data:
+        u.password_hash = _hash_password(data.pop("password"))
+    if "role" in data and data["role"] not in ("agent", "supervisor"):
+        raise HTTPException(400, detail="role must be 'agent' or 'supervisor'")
+    for k, v in data.items():
+        setattr(u, k, v)
+    db.commit(); db.refresh(u)
+    return {
+        "id": u.id,
+        "uuid": str(u.uuid),
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+        "is_active": u.is_active,
+        "updated_at": u.updated_at.isoformat() if u.updated_at else None,
+    }
+
+
+@app.delete("/users/{user_id}", status_code=204)
+def delete_user(user_id: int, db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.id == user_id).first()
+    if not u:
+        raise HTTPException(404, detail="User not found")
+    db.delete(u); db.commit()
+
+
+@app.post("/auth/login")
+def login(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    u = db.query(models.User).filter(models.User.email == email).first()
+    if not u or not _verify_password(password, u.password_hash):
+        raise HTTPException(401, detail="Invalid email or password")
+    if not u.is_active:
+        raise HTTPException(403, detail="Account is disabled")
+    u.last_login_at = datetime.utcnow()
+    db.commit()
+    return {
+        "id": u.id,
+        "uuid": str(u.uuid),
+        "name": u.name,
+        "email": u.email,
+        "role": u.role,
+    }
 
 
 # ============================================================================

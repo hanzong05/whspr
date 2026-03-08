@@ -1,0 +1,30 @@
+# Datasets & training artifacts
+ravdess_download/
+training_data/
+*.zip
+
+# Model outputs
+outputs/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment
+.env
+.env.local
+.env*.local
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Node
+node_modules/
+.next/
+
+# OS
+.DS_Store
+Thumbs.db
