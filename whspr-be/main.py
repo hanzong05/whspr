@@ -193,7 +193,9 @@ def initialize_models():
 
 @app.on_event("startup")
 async def startup_event():
-    initialize_models()
+    import threading
+    thread = threading.Thread(target=initialize_models, daemon=True)
+    thread.start()
 
 
 # ============================================================================
