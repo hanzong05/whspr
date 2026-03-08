@@ -185,7 +185,7 @@ export default function RecordingUpload() {
     e.stopPropagation();
     setIsDragging(false);
 
-    const files = Array.from(e.dataTransfer.files).filter(
+    const files: File[] = Array.from(e.dataTransfer.files).filter(
       (file) =>
         file.type.startsWith("audio/") ||
         [".mp3", ".wav", ".m4a", ".ogg", ".webm"].some((ext) =>
