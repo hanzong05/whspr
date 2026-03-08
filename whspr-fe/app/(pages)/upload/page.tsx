@@ -2,6 +2,57 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface AnalysisData {
+  csr_recommendations?: {
+    available?: boolean;
+    action_required?: {
+      action: string;
+      urgency: string;
+      reason: string;
+      instruction: string;
+      color: string;
+    };
+    communication_guidance?: {
+      recommended_tone: string;
+      example_phrases: string[];
+    };
+    do_and_dont?: {
+      do: string[];
+      dont: string[];
+    };
+  };
+  speaker_detection?: {
+    mode: string;
+    agent_channel?: string;
+    caller_channel?: string;
+    note?: string;
+  };
+  emotion_analysis?: {
+    predicted_emotion: string;
+    confidence: number;
+    all_probabilities?: Record<string, number>;
+    emotional_state?: {
+      valence?: string;
+      arousal?: string;
+    };
+  };
+  transcription?: {
+    text: string;
+    duration: number;
+    language: string;
+  };
+}
+
+interface UploadResult {
+  filename: string;
+  status: string;
+  progress?: number;
+  error?: string;
+  data?: AnalysisData;
+}
+
 const AGENTS = [
   { id: "1", name: "Maria Santos", group: "West Coast" },
   { id: "2", name: "James Reyes", group: "West Coast" },
@@ -163,7 +214,7 @@ export default function RecordingUpload() {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadResults, setUploadResults] = useState<Record<string, unknown>[]>([]);
+  const [uploadResults, setUploadResults] = useState<UploadResult[]>([]);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<(typeof AGENTS)[0] | null>(null);
 
@@ -207,7 +258,7 @@ export default function RecordingUpload() {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const formatFileSize = (bytes) => {
+  const formatFileSize = (bytes: number) => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
     const sizes = ["Bytes", "KB", "MB", "GB"];
@@ -215,7 +266,7 @@ export default function RecordingUpload() {
     return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + " " + sizes[i];
   };
 
-  const analyzeFile = async (file, index) => {
+  const analyzeFile = async (file: File, index: number) => {
     const formData = new FormData();
     formData.append("file", file);
 
@@ -255,13 +306,12 @@ export default function RecordingUpload() {
         return newResults;
       });
     } catch (error) {
-      // Update with error
       setUploadResults((prev) => {
         const newResults = [...prev];
         newResults[index] = {
           filename: file.name,
           status: "failed",
-          error: error.message,
+          error: error instanceof Error ? error.message : String(error),
         };
         return newResults;
       });
@@ -290,8 +340,8 @@ export default function RecordingUpload() {
     setSelectedFiles([]);
   };
 
-  const getEmotionColor = (emotion) => {
-    const colors = {
+  const getEmotionColor = (emotion: string) => {
+    const colors: Record<string, string> = {
       angry: "text-red-600",
       frustrated: "text-orange-600",
       sad: "text-blue-600",
@@ -302,8 +352,8 @@ export default function RecordingUpload() {
     return colors[emotion?.toLowerCase()] || "text-gray-600";
   };
 
-  const getRiskColor = (risk) => {
-    const colors = {
+  const getRiskColor = (risk: string) => {
+    const colors: Record<string, string> = {
       critical: "bg-red-100 text-red-800",
       high: "bg-orange-100 text-orange-800",
       medium: "bg-yellow-100 text-yellow-800",
@@ -664,7 +714,7 @@ export default function RecordingUpload() {
                                 <strong>Agent:</strong> {result.data.speaker_detection.agent_channel.toUpperCase()} channel
                               </p>
                               <p>
-                                <strong>Caller:</strong> {result.data.speaker_detection.caller_channel.toUpperCase()} channel
+                                <strong>Caller:</strong> {result.data.speaker_detection.caller_channel?.toUpperCase()} channel
                               </p>
                             </>
                           )}
@@ -701,7 +751,7 @@ export default function RecordingUpload() {
                           {result.data.emotion_analysis.all_probabilities &&
                             Object.entries(
                               result.data.emotion_analysis.all_probabilities,
-                            ).map(([emotion, prob]) => (
+                            ).map(([emotion, prob]: [string, number]) => (
                               <div
                                 key={emotion}
                                 className="flex items-center gap-2"
@@ -781,7 +831,7 @@ export default function RecordingUpload() {
                             </p>
                             <ul className="space-y-1">
                               {result.data.csr_recommendations.communication_guidance.example_phrases.map(
-                                (phrase, i) => (
+                                (phrase: string, i: number) => (
                                   <li key={i} className="text-sm text-blue-700">
                                     • "{phrase}"
                                   </li>
@@ -799,7 +849,7 @@ export default function RecordingUpload() {
                             </p>
                             <ul className="space-y-1">
                               {result.data.csr_recommendations.do_and_dont.do.map(
-                                (item, i) => (
+                                (item: string, i: number) => (
                                   <li
                                     key={i}
                                     className="text-sm text-green-700"
@@ -820,7 +870,7 @@ export default function RecordingUpload() {
                             </p>
                             <ul className="space-y-1">
                               {result.data.csr_recommendations.do_and_dont.dont.map(
-                                (item, i) => (
+                                (item: string, i: number) => (
                                   <li key={i} className="text-sm text-red-700">
                                     • {item}
                                   </li>
