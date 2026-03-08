@@ -59,7 +59,8 @@ except Exception as _db_err:
     print(f"⚠️  Database not available: {_db_err}")
 
 # ============================================================================
-# ML MODULES (soft import)
+# ML MODULES — imported lazily inside initialize_models() (background thread)
+# so they don't block uvicorn from binding the port on startup
 # ============================================================================
 
 modules_status = {
@@ -69,42 +70,6 @@ modules_status = {
     "state_classifier": False,
     "recommendation_engine": False,
 }
-
-WhisperTranscriber = None
-try:
-    from whisper_asr_module import CSRCallTranscriber
-    WhisperTranscriber = CSRCallTranscriber
-    modules_status["whisper"] = True
-except Exception:
-    pass
-
-MFCCFeatureExtractor = None
-try:
-    from mfcc_feature_extraction import MFCCFeatureExtractor
-    modules_status["mfcc"] = True
-except Exception:
-    pass
-
-EmotionClassifier = None
-try:
-    from ml_classifier import EmotionClassifier
-    modules_status["emotion_classifier"] = True
-except Exception:
-    pass
-
-EmotionalStateClassifier = None
-try:
-    from emotional_state_classifier import EmotionalStateClassifier
-    modules_status["state_classifier"] = True
-except Exception:
-    pass
-
-CSREmotionClassifier = None
-try:
-    from csr_emotion_recommendations import CSREmotionClassifier
-    modules_status["recommendation_engine"] = True
-except Exception:
-    pass
 
 # ============================================================================
 # APP
@@ -149,46 +114,53 @@ recommendation_engine = None
 def initialize_models():
     global transcriber, feature_extractor, emotion_classifier, state_classifier, recommendation_engine
 
-    if WhisperTranscriber:
-        try:
-            transcriber = WhisperTranscriber(model_size="base", language="en")
-        except Exception:
-            pass
+    # Imports are done here so they run in the background thread,
+    # not at module load time — keeps uvicorn port-ready instantly.
+    try:
+        from whisper_asr_module import CSRCallTranscriber
+        transcriber = CSRCallTranscriber(model_size="base", language="en")
+        modules_status["whisper"] = True
+    except Exception:
+        pass
 
-    if MFCCFeatureExtractor:
-        try:
-            feature_extractor = MFCCFeatureExtractor()
-        except Exception:
-            pass
+    try:
+        from mfcc_feature_extraction import MFCCFeatureExtractor as _MFCC
+        feature_extractor = _MFCC()
+        modules_status["mfcc"] = True
+    except Exception:
+        pass
 
-    if EmotionClassifier:
-        try:
-            emotion_classifier = EmotionClassifier()
-            model_path = MODELS_DIR / "svm_emotion_model.pkl"
-            if not model_path.exists() and supabase_client:
-                try:
-                    print("⬇️  Downloading svm_emotion_model.pkl from Supabase Storage…")
-                    res = supabase_client.storage.from_("models").download("svm_emotion_model.pkl")
-                    model_path.write_bytes(res)
-                    print("✅  Model downloaded successfully.")
-                except Exception as dl_err:
-                    print(f"⚠️  Could not download model from bucket: {dl_err}")
-            if model_path.exists():
-                emotion_classifier.load_model(str(model_path))
-        except Exception:
-            pass
+    try:
+        from ml_classifier import EmotionClassifier as _EC
+        emotion_classifier = _EC()
+        modules_status["emotion_classifier"] = True
+        model_path = MODELS_DIR / "svm_emotion_model.pkl"
+        if not model_path.exists() and supabase_client:
+            try:
+                print("⬇️  Downloading svm_emotion_model.pkl from Supabase Storage…")
+                res = supabase_client.storage.from_("models").download("svm_emotion_model.pkl")
+                model_path.write_bytes(res)
+                print("✅  Model downloaded successfully.")
+            except Exception as dl_err:
+                print(f"⚠️  Could not download model from bucket: {dl_err}")
+        if model_path.exists():
+            emotion_classifier.load_model(str(model_path))
+    except Exception:
+        pass
 
-    if EmotionalStateClassifier:
-        try:
-            state_classifier = EmotionalStateClassifier()
-        except Exception:
-            pass
+    try:
+        from emotional_state_classifier import EmotionalStateClassifier as _ESC
+        state_classifier = _ESC()
+        modules_status["state_classifier"] = True
+    except Exception:
+        pass
 
-    if CSREmotionClassifier:
-        try:
-            recommendation_engine = CSREmotionClassifier()
-        except Exception:
-            pass
+    try:
+        from csr_emotion_recommendations import CSREmotionClassifier as _CEC
+        recommendation_engine = _CEC()
+        modules_status["recommendation_engine"] = True
+    except Exception:
+        pass
 
 
 @app.on_event("startup")
