@@ -1,150 +1,122 @@
 """
-CSR Call Recording Analysis API - Complete Fixed Version
-FastAPI backend with emotion analysis and CSR recommendations
+CSR Call Recording Analysis API
+FastAPI backend — ML pipeline + CRUD endpoints
 """
 
-from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks, Form, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from typing import Optional
 import uvicorn
 import sys
 import os
 import shutil
 from pathlib import Path
-from datetime import datetime
-import traceback
+from datetime import datetime, date
 import json
-from typing import Optional
-import logging
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+import uuid as uuid_lib
+from sqlalchemy.orm import Session
 
 # ============================================================================
-# ENSURE PROPER PYTHON PATH
+# PYTHON PATH
 # ============================================================================
+
 CURRENT_DIR = Path(__file__).parent.absolute()
 if str(CURRENT_DIR) not in sys.path:
     sys.path.insert(0, str(CURRENT_DIR))
 
 # ============================================================================
-# IMPORT ALL MODULES WITH COMPREHENSIVE ERROR HANDLING
+# DATABASE (soft import — API still works without DB)
 # ============================================================================
 
-# Track which modules loaded successfully
+db_available = False
+try:
+    from database import get_db, SessionLocal
+    import models
+    db_available = True
+except Exception as _db_err:
+    print(f"⚠️  Database not available: {_db_err}")
+
+# ============================================================================
+# ML MODULES (soft import)
+# ============================================================================
+
 modules_status = {
-    'whisper': False,
-    'mfcc': False,
-    'emotion_classifier': False,
-    'state_classifier': False,
-    'recommendation_engine': False
+    "whisper": False,
+    "mfcc": False,
+    "emotion_classifier": False,
+    "state_classifier": False,
+    "recommendation_engine": False,
 }
 
-# Import WhisperTranscriber
 WhisperTranscriber = None
 try:
     from whisper_asr_module import CSRCallTranscriber
-    WhisperTranscriber = CSRCallTranscriber  # Assign the imported class
-    modules_status['whisper'] = True
-    logger.info("✓ WhisperTranscriber imported successfully")
-except ImportError as e:
-    logger.warning(f"✗ WhisperTranscriber import failed: {e}")
-except Exception as e:
-    logger.error(f"✗ Unexpected error importing WhisperTranscriber: {e}")
+    WhisperTranscriber = CSRCallTranscriber
+    modules_status["whisper"] = True
+except Exception:
+    pass
 
-# Import MFCCFeatureExtractor
 MFCCFeatureExtractor = None
 try:
     from mfcc_feature_extraction import MFCCFeatureExtractor
-    modules_status['mfcc'] = True
-    logger.info("✓ MFCCFeatureExtractor imported successfully")
-except ImportError as e:
-    logger.warning(f"✗ MFCCFeatureExtractor import failed: {e}")
-except Exception as e:
-    logger.error(f"✗ Unexpected error importing MFCCFeatureExtractor: {e}")
+    modules_status["mfcc"] = True
+except Exception:
+    pass
 
-# Import EmotionClassifier
 EmotionClassifier = None
 try:
     from ml_classifier import EmotionClassifier
-    modules_status['emotion_classifier'] = True
-    logger.info("✓ EmotionClassifier imported successfully")
-except ImportError as e:
-    logger.warning(f"✗ EmotionClassifier import failed: {e}")
-except Exception as e:
-    logger.error(f"✗ Unexpected error importing EmotionClassifier: {e}")
+    modules_status["emotion_classifier"] = True
+except Exception:
+    pass
 
-# Import EmotionalStateClassifier
 EmotionalStateClassifier = None
 try:
     from emotional_state_classifier import EmotionalStateClassifier
-    modules_status['state_classifier'] = True
-    logger.info("✓ EmotionalStateClassifier imported successfully")
-except ImportError as e:
-    logger.warning(f"✗ EmotionalStateClassifier import failed: {e}")
-except Exception as e:
-    logger.error(f"✗ Unexpected error importing EmotionalStateClassifier: {e}")
+    modules_status["state_classifier"] = True
+except Exception:
+    pass
 
-# Import CSREmotionClassifier - WITH SPECIAL HANDLING
 CSREmotionClassifier = None
 try:
-    # First check if file exists
-    csr_file = CURRENT_DIR / 'csr_emotion_recommendations.py'
-    if not csr_file.exists():
-        logger.error(f"✗ File not found: {csr_file}")
-    else:
-        # Try to compile first to catch syntax errors
-        try:
-            with open(csr_file, 'r', encoding='utf-8') as f:
-                compile(f.read(), str(csr_file), 'exec')
-            logger.info("✓ csr_emotion_recommendations.py syntax check passed")
-        except SyntaxError as se:
-            logger.error(f"✗ Syntax error in csr_emotion_recommendations.py at line {se.lineno}: {se.msg}")
-        
-        # Now try to import
-        from csr_emotion_recommendations import CSREmotionClassifier
-        modules_status['recommendation_engine'] = True
-        logger.info("✓ CSREmotionClassifier imported successfully")
-        
-except ImportError as e:
-    logger.warning(f"✗ CSREmotionClassifier import failed: {e}")
-    logger.warning(f"   Make sure csr_emotion_recommendations.py is in: {CURRENT_DIR}")
-except SyntaxError as e:
-    logger.error(f"✗ Syntax error in csr_emotion_recommendations.py: {e}")
-except Exception as e:
-    logger.error(f"✗ Unexpected error importing CSREmotionClassifier: {e}")
-    logger.error(traceback.format_exc())
+    from csr_emotion_recommendations import CSREmotionClassifier
+    modules_status["recommendation_engine"] = True
+except Exception:
+    pass
 
 # ============================================================================
-# CREATE FASTAPI APPLICATION
+# APP
 # ============================================================================
 
 app = FastAPI(
     title="CSR Call Recording Analysis API",
     description="Emotion detection and CSR recommendation system for call recordings",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
 )
-
-# ============================================================================
-# CONFIGURE CORS
-# ============================================================================
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify exact origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # ============================================================================
-# GLOBAL MODEL INSTANCES
+# DIRECTORIES
+# ============================================================================
+
+UPLOAD_DIR = Path("uploads")
+OUTPUT_DIR = Path("outputs")
+MODELS_DIR = Path("models")
+
+for _d in [UPLOAD_DIR, OUTPUT_DIR, MODELS_DIR, OUTPUT_DIR / "recommendations"]:
+    _d.mkdir(parents=True, exist_ok=True)
+
+# ============================================================================
+# ML MODEL INSTANCES
 # ============================================================================
 
 transcriber = None
@@ -153,134 +125,62 @@ emotion_classifier = None
 state_classifier = None
 recommendation_engine = None
 
-# ============================================================================
-# DIRECTORY SETUP
-# ============================================================================
-
-UPLOAD_DIR = Path("uploads")
-OUTPUT_DIR = Path("outputs")
-MODELS_DIR = Path("models")
-
-# Create all necessary directories
-for directory in [UPLOAD_DIR, OUTPUT_DIR, MODELS_DIR, OUTPUT_DIR / "recommendations"]:
-    directory.mkdir(parents=True, exist_ok=True)
-    logger.info(f"✓ Directory ready: {directory}")
-
-# ============================================================================
-# MODEL INITIALIZATION FUNCTION
-# ============================================================================
 
 def initialize_models():
-    """Initialize all ML models and components with comprehensive error handling"""
-    global transcriber, feature_extractor, emotion_classifier
-    global state_classifier, recommendation_engine
-    
-    logger.info("="*70)
-    logger.info("CSR CALL RECORDING ANALYSIS API - INITIALIZATION")
-    logger.info("="*70)
-    
-    # Initialize Whisper ASR
-    if modules_status.get('whisper') and WhisperTranscriber:
+    global transcriber, feature_extractor, emotion_classifier, state_classifier, recommendation_engine
+
+    if WhisperTranscriber:
         try:
-            transcriber = WhisperTranscriber(model_size='base', language='en')
-            logger.info("✓ Whisper ASR initialized successfully")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize Whisper ASR: {e}")
-            transcriber = None
-    else:
-        logger.warning("⚠ Whisper ASR module not available - transcription disabled")
-    
-    # Initialize MFCC Feature Extractor
-    if modules_status.get('mfcc') and MFCCFeatureExtractor:
+            transcriber = WhisperTranscriber(model_size="base", language="en")
+        except Exception:
+            pass
+
+    if MFCCFeatureExtractor:
         try:
             feature_extractor = MFCCFeatureExtractor()
-            logger.info("✓ MFCC Feature Extractor initialized successfully")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize MFCC Feature Extractor: {e}")
-            feature_extractor = None
-    else:
-        logger.warning("⚠ MFCC Feature Extractor module not available")
-    
-    # Initialize ML Emotion Classifier
-    if modules_status.get('emotion_classifier') and EmotionClassifier:
+        except Exception:
+            pass
+
+    if EmotionClassifier:
         try:
             emotion_classifier = EmotionClassifier()
-            logger.info("✓ ML Emotion Classifier initialized successfully")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize Emotion Classifier: {e}")
-            emotion_classifier = None
-    else:
-        logger.warning("⚠ Emotion Classifier module not available")
-    
-    # Initialize Emotional State Classifier
-    if modules_status.get('state_classifier') and EmotionalStateClassifier:
+            model_path = MODELS_DIR / "svm_emotion_model.pkl"
+            if model_path.exists():
+                emotion_classifier.load_model(str(model_path))
+        except Exception:
+            pass
+
+    if EmotionalStateClassifier:
         try:
             state_classifier = EmotionalStateClassifier()
-            logger.info("✓ Emotional State Classifier initialized successfully")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize State Classifier: {e}")
-            state_classifier = None
-    else:
-        logger.warning("⚠ Emotional State Classifier module not available")
-    
-    # Initialize CSR Recommendation Engine
-    if modules_status.get('recommendation_engine') and CSREmotionClassifier:
+        except Exception:
+            pass
+
+    if CSREmotionClassifier:
         try:
             recommendation_engine = CSREmotionClassifier()
-            logger.info("✓ CSR Recommendation Engine initialized successfully")
-        except Exception as e:
-            logger.error(f"✗ Failed to initialize CSR Recommendation Engine: {e}")
-            logger.error(traceback.format_exc())
-            recommendation_engine = None
-    else:
-        logger.warning("⚠ CSR Recommendation Engine module not available")
-        logger.warning("   Check that csr_emotion_recommendations.py exists and has no errors")
-    
-    logger.info("="*70)
-    logger.info("INITIALIZATION SUMMARY")
-    logger.info("="*70)
-    logger.info(f"Transcriber:           {'✓ Ready' if transcriber else '✗ Not Available'}")
-    logger.info(f"Feature Extractor:     {'✓ Ready' if feature_extractor else '✗ Not Available'}")
-    logger.info(f"Emotion Classifier:    {'✓ Ready' if emotion_classifier else '✗ Not Available'}")
-    logger.info(f"State Classifier:      {'✓ Ready' if state_classifier else '✗ Not Available'}")
-    logger.info(f"Recommendation Engine: {'✓ Ready' if recommendation_engine else '✗ Not Available'}")
-    logger.info("="*70)
+        except Exception:
+            pass
 
-# ============================================================================
-# STARTUP AND SHUTDOWN EVENTS
-# ============================================================================
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize models when API starts"""
-    logger.info("Starting CSR Call Recording Analysis API...")
-    try:
-        initialize_models()
-        logger.info("✓ API startup complete")
-    except Exception as e:
-        logger.error(f"✗ Startup failed: {e}")
-        logger.error(traceback.format_exc())
+    initialize_models()
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    logger.info("Shutting down CSR Call Recording Analysis API...")
 
 # ============================================================================
-# UTILITY FUNCTIONS
+# UTILITIES
 # ============================================================================
 
 def cleanup_file(filepath: Path):
-    """Clean up temporary files"""
     try:
         if filepath.exists():
             filepath.unlink()
-            logger.info(f"Cleaned up: {filepath}")
-    except Exception as e:
-        logger.warning(f"Could not cleanup {filepath}: {e}")
+    except Exception:
+        pass
+
 
 def save_upload_file(upload_file: UploadFile, destination: Path) -> Path:
-    """Save uploaded file to destination"""
     try:
         with destination.open("wb") as buffer:
             shutil.copyfileobj(upload_file.file, buffer)
@@ -288,345 +188,636 @@ def save_upload_file(upload_file: UploadFile, destination: Path) -> Path:
     finally:
         upload_file.file.close()
 
+
 # ============================================================================
-# API ENDPOINTS
+# ML ENDPOINTS
 # ============================================================================
 
 @app.get("/")
 async def root():
-    """Root endpoint - API information and status"""
     return {
         "message": "CSR Call Recording Analysis API",
         "version": "1.0.0",
         "status": "running",
-        "documentation": {
-            "swagger": "/docs",
-            "redoc": "/redoc"
-        },
-        "modules_imported": modules_status,
-        "models_initialized": {
-            "transcriber": transcriber is not None,
-            "feature_extractor": feature_extractor is not None,
-            "emotion_classifier": emotion_classifier is not None,
-            "state_classifier": state_classifier is not None,
-            "recommendation_engine": recommendation_engine is not None
-        },
-        "endpoints": {
-            "health": "/health",
-            "analyze": "/analyze (POST)",
-            "transcribe": "/transcribe-only (POST)",
-            "models_status": "/models/status"
-        }
+        "db_connected": db_available,
+        "modules": modules_status,
     }
+
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    core_models_ready = all([
-        transcriber is not None,
-        feature_extractor is not None,
-        emotion_classifier is not None,
-        state_classifier is not None
-    ])
-    
+    ready = all([transcriber, feature_extractor, emotion_classifier, state_classifier])
     return {
-        "status": "healthy" if core_models_ready else "degraded",
+        "status": "healthy" if ready else "degraded",
         "timestamp": datetime.now().isoformat(),
         "models": {
             "transcriber": transcriber is not None,
             "feature_extractor": feature_extractor is not None,
             "emotion_classifier": emotion_classifier is not None,
             "state_classifier": state_classifier is not None,
-            "recommendation_engine": recommendation_engine is not None
+            "recommendation_engine": recommendation_engine is not None,
         },
-        "ready_for_analysis": core_models_ready
+        "ready_for_analysis": ready,
     }
+
 
 @app.post("/analyze")
 async def analyze_audio(
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None
+    agent_id: Optional[int] = Form(None),
+    background_tasks: BackgroundTasks = None,
 ):
-    """
-    Main endpoint: Analyze audio file for emotion and generate CSR recommendations
-    
-    Args:
-        file: Audio file (WAV, MP3, M4A, etc.)
-    
-    Returns:
-        Complete analysis with transcription, emotion detection, and CSR recommendations
-    """
-    
-    # Validate required models are loaded
-    required_models = {
+    required = {
         "transcriber": transcriber,
         "feature_extractor": feature_extractor,
         "emotion_classifier": emotion_classifier,
-        "state_classifier": state_classifier
+        "state_classifier": state_classifier,
     }
-    
-    missing_models = [name for name, model in required_models.items() if model is None]
-    
-    if missing_models:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Service not ready. Missing models: {', '.join(missing_models)}"
-        )
-    
-    # Validate file
+    missing = [k for k, v in required.items() if v is None]
+    if missing:
+        raise HTTPException(503, detail=f"Service not ready. Missing: {', '.join(missing)}")
+
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-    
-    # Generate unique filename
+        raise HTTPException(400, detail="No file provided")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_ext = Path(file.filename).suffix
-    temp_file = UPLOAD_DIR / f"audio_{timestamp}{file_ext}"
-    
+    temp_file = UPLOAD_DIR / f"audio_{timestamp}{Path(file.filename).suffix}"
+
     try:
-        logger.info(f"Processing file: {file.filename}")
-        
-        # Save uploaded file
         save_upload_file(file, temp_file)
-        logger.info(f"File saved to: {temp_file}")
-        
-        # STEP 1: Transcribe audio
-        logger.info("Step 1/5: Transcribing audio...")
-        transcription_result = transcriber.transcribe_audio(str(temp_file))
-        
-        if not transcription_result or 'error' in transcription_result:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Transcription failed: {transcription_result.get('error', 'Unknown error')}"
-            )
-        
-        logger.info(f"✓ Transcription complete: {len(transcription_result.get('text', ''))} characters")
-        
-        # STEP 2: Extract MFCC features
-        logger.info("Step 2/5: Extracting audio features...")
-        features = feature_extractor.extract_features(str(temp_file))
-        
+
+        transcription_result = transcriber.transcribe_call(str(temp_file))
+        if not transcription_result or "error" in transcription_result:
+            raise HTTPException(500, detail=f"Transcription failed: {transcription_result.get('error', 'Unknown')}")
+
+        speaker_info = transcriber.detect_speakers(str(temp_file))
+        features = feature_extractor.extract_features(speaker_info["caller_audio_path"])
         if features is None:
-            raise HTTPException(
-                status_code=500,
-                detail="Feature extraction failed"
-            )
-        
-        logger.info(f"✓ Features extracted: {features.shape}")
-        
-        # STEP 3: Predict emotion
-        logger.info("Step 3/5: Classifying emotion...")
-        prediction = emotion_classifier.predict(features)
-        
-        if not prediction or 'error' in prediction:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Emotion prediction failed: {prediction.get('error', 'Unknown error')}"
-            )
-        
-        logger.info(f"✓ Emotion predicted: {prediction['emotion']} ({prediction['confidence']:.2%})")
-        
-        # STEP 4: Analyze emotional state
-        logger.info("Step 4/5: Analyzing emotional state...")
-        emotional_state = state_classifier.classify_state(prediction)
-        logger.info(f"✓ Emotional state analyzed: {emotional_state['valence']}/{emotional_state['arousal']}")
-        
-        # STEP 5: Generate CSR recommendations
-        logger.info("Step 5/5: Generating CSR recommendations...")
-        recommendations = None
-        
+            raise HTTPException(500, detail="Feature extraction failed")
+
+        prediction = emotion_classifier.predict_single(features)
+        if not prediction or "error" in prediction:
+            raise HTTPException(500, detail=f"Emotion prediction failed: {prediction.get('error', 'Unknown')}")
+
+        emotional_state = state_classifier.classify_emotional_state(prediction)
+
+        recommendations = {"available": False, "message": "Recommendation engine not initialized"}
         if recommendation_engine:
             try:
-                csr_emotional_state = recommendation_engine.classify_emotional_state(prediction)
-                recommendations = recommendation_engine.generate_recommendation(csr_emotional_state)
-                
-                # Generate text report
-                report = recommendation_engine.generate_report(csr_emotional_state, recommendations)
-                recommendations['report'] = report
-                
-                # Save recommendation files
-                saved_files = recommendation_engine.save_recommendation(
-                    csr_emotional_state,
-                    recommendations,
-                    output_dir=str(OUTPUT_DIR / 'recommendations')
+                csr_state = recommendation_engine.classify_emotional_state(prediction)
+                recommendations = recommendation_engine.generate_recommendation(csr_state)
+                recommendations["report"] = recommendation_engine.generate_report(csr_state, recommendations)
+                recommendations["saved_files"] = recommendation_engine.save_recommendation(
+                    csr_state, recommendations, output_dir=str(OUTPUT_DIR / "recommendations")
                 )
-                recommendations['saved_files'] = saved_files
-                
-                logger.info(f"✓ CSR recommendations generated and saved")
-                
             except Exception as e:
-                logger.error(f"Failed to generate recommendations: {e}")
-                logger.error(traceback.format_exc())
-                recommendations = {
-                    "available": False,
-                    "error": str(e),
-                    "message": "Recommendation generation failed but analysis completed"
-                }
-        else:
-            recommendations = {
-                "available": False,
-                "message": "Recommendation engine not initialized"
-            }
-        
-        # Compile complete results
+                recommendations = {"available": False, "error": str(e)}
+
         result = {
             "success": True,
             "timestamp": datetime.now().isoformat(),
             "filename": file.filename,
             "transcription": {
-                "text": transcription_result.get('text', ''),
-                "language": transcription_result.get('language', 'en'),
-                "segments": transcription_result.get('segments', []),
-                "duration": transcription_result.get('duration', 0),
-                "processing_time": transcription_result.get('processing_time', 0)
+                "text": transcription_result.get("text", ""),
+                "language": transcription_result.get("language", "en"),
+                "segments": transcription_result.get("segments", []),
+                "duration": transcription_result.get("duration", 0),
+            },
+            "speaker_detection": {
+                "mode": speaker_info["mode"],
+                "agent_channel": speaker_info.get("agent_channel"),
+                "caller_channel": speaker_info.get("caller_channel"),
+                "message": speaker_info["message"],
             },
             "emotion_analysis": {
-                "predicted_emotion": prediction['emotion'],
-                "confidence": float(prediction['confidence']),
-                "all_probabilities": prediction.get('all_probabilities', {}),
-                "emotional_state": emotional_state
+                "predicted_emotion": prediction["emotion"],
+                "confidence": float(prediction["confidence"]),
+                "all_probabilities": prediction.get("all_probabilities", {}),
+                "emotional_state": emotional_state,
             },
             "csr_recommendations": recommendations,
-            "metadata": {
-                "audio_file": file.filename,
-                "audio_duration": transcription_result.get('duration', 0),
-                "total_processing_time": transcription_result.get('processing_time', 0)
-            }
         }
-        
-        # Save complete analysis result
-        result_file = OUTPUT_DIR / f"analysis_{timestamp}.json"
-        with open(result_file, 'w', encoding='utf-8') as f:
+
+        with open(OUTPUT_DIR / f"analysis_{timestamp}.json", "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
-        
-        logger.info(f"✓ Complete analysis saved to: {result_file}")
-        logger.info(f"✓ Analysis complete for {file.filename}")
-        
-        # Schedule cleanup
+
+        # Persist to DB if agent_id provided
+        if db_available and agent_id:
+            try:
+                db: Session = SessionLocal()
+                try:
+                    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+                    if agent:
+                        emotion_data = result["emotion_analysis"]
+                        trans_data   = result["transcription"]
+                        spk_data     = result["speaker_detection"]
+                        rec_data     = result.get("csr_recommendations", {})
+
+                        risk_map = {
+                            "angry": "Critical", "frustrated": "High",
+                            "sad": "Medium", "neutral": "Low",
+                            "happy": "Low", "satisfied": "Low",
+                        }
+                        risk_level = risk_map.get(emotion_data["predicted_emotion"], "Low")
+
+                        call_record = models.Call(
+                            uuid=str(uuid_lib.uuid4()),
+                            agent_id=agent.id,
+                            cluster_id=agent.cluster_id,
+                            filename=file.filename,
+                            file_path=str(temp_file),
+                            file_size=temp_file.stat().st_size if temp_file.exists() else None,
+                            duration_sec=int(trans_data.get("duration", 0)) or None,
+                            upload_status="analyzed",
+                            call_date=date.today(),
+                        )
+                        db.add(call_record)
+                        db.flush()
+
+                        ar = models.AnalysisResult(
+                            call_id=call_record.id,
+                            predicted_emotion=emotion_data["predicted_emotion"],
+                            confidence=emotion_data["confidence"],
+                            all_probabilities=emotion_data.get("all_probabilities"),
+                            valence=emotion_data.get("emotional_state", {}).get("valence"),
+                            arousal=emotion_data.get("emotional_state", {}).get("arousal"),
+                            risk_level=risk_level,
+                            transcription_text=trans_data.get("text"),
+                            transcription_lang=trans_data.get("language", "en"),
+                            transcription_duration=trans_data.get("duration"),
+                            speaker_mode=spk_data.get("mode"),
+                            agent_channel=spk_data.get("agent_channel"),
+                            caller_channel=spk_data.get("caller_channel"),
+                        )
+                        db.add(ar)
+                        db.flush()
+
+                        if rec_data.get("available") is not False:
+                            action_req = rec_data.get("action_required", {})
+                            comm       = rec_data.get("communication_guidance", {})
+                            dd         = rec_data.get("dos_and_donts", {})
+                            db.add(models.CSRRecommendation(
+                                analysis_result_id=ar.id,
+                                action=action_req.get("action", "NONE"),
+                                urgency=action_req.get("urgency", "LOW"),
+                                reason=action_req.get("reason"),
+                                instruction=action_req.get("instruction"),
+                                action_color=action_req.get("color"),
+                                recommended_tone=comm.get("recommended_tone"),
+                                example_phrases=comm.get("example_phrases"),
+                                do_list=dd.get("do"),
+                                dont_list=dd.get("dont"),
+                            ))
+
+                        agent.risk_level = (
+                            "Risky" if risk_level in ("Critical", "High")
+                            else "Medium" if risk_level == "Medium"
+                            else agent.risk_level
+                        )
+                        db.commit()
+                        result["call_id"] = call_record.id
+                finally:
+                    db.close()
+            except Exception as db_err:
+                print(f"⚠️  DB persist error: {db_err}")
+
         if background_tasks:
             background_tasks.add_task(cleanup_file, temp_file)
-        
+            if speaker_info["mode"] == "stereo" and speaker_info["caller_audio_path"] != str(temp_file):
+                background_tasks.add_task(cleanup_file, Path(speaker_info["caller_audio_path"]))
+
         return JSONResponse(content=result)
-        
+
     except HTTPException:
         cleanup_file(temp_file)
         raise
-        
     except Exception as e:
         cleanup_file(temp_file)
-        logger.error(f"Analysis error: {e}")
-        logger.error(traceback.format_exc())
-        raise HTTPException(
-            status_code=500,
-            detail=f"Analysis failed: {str(e)}"
-        )
+        raise HTTPException(500, detail=f"Analysis failed: {str(e)}")
+
 
 @app.post("/transcribe-only")
-async def transcribe_only(
-    file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None
-):
-    """
-    Transcribe audio file without emotion analysis (faster)
-    
-    Args:
-        file: Audio file
-    
-    Returns:
-        Transcription result only
-    """
-    
+async def transcribe_only(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
     if not transcriber:
-        raise HTTPException(
-            status_code=503,
-            detail="Transcriber not initialized"
-        )
-    
+        raise HTTPException(503, detail="Transcriber not initialized")
     if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided")
-    
+        raise HTTPException(400, detail="No file provided")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    file_ext = Path(file.filename).suffix
-    temp_file = UPLOAD_DIR / f"audio_{timestamp}{file_ext}"
-    
+    temp_file = UPLOAD_DIR / f"audio_{timestamp}{Path(file.filename).suffix}"
+
     try:
         save_upload_file(file, temp_file)
-        logger.info(f"Transcribing: {file.filename}")
-        
-        result = transcriber.transcribe_audio(str(temp_file))
-        
+        result = transcriber.transcribe_call(str(temp_file))
         if background_tasks:
             background_tasks.add_task(cleanup_file, temp_file)
-        
-        return JSONResponse(content={
-            "success": True,
-            "filename": file.filename,
-            "transcription": result
-        })
-        
+        return JSONResponse(content={"success": True, "filename": file.filename, "transcription": result})
     except Exception as e:
         cleanup_file(temp_file)
-        logger.error(f"Transcription error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Transcription failed: {str(e)}"
-        )
+        raise HTTPException(500, detail=f"Transcription failed: {str(e)}")
+
 
 @app.get("/models/status")
-async def models_status():
-    """Get detailed status of all models and modules"""
+async def models_status_endpoint():
     return {
         "modules_imported": modules_status,
         "models_initialized": {
-            "transcriber": {
-                "loaded": transcriber is not None,
-                "model_size": getattr(transcriber, 'model_size', None) if transcriber else None,
-                "language": getattr(transcriber, 'language', None) if transcriber else None
-            },
-            "feature_extractor": {
-                "loaded": feature_extractor is not None,
-                "n_mfcc": getattr(feature_extractor, 'n_mfcc', None) if feature_extractor else None,
-                "sample_rate": getattr(feature_extractor, 'sample_rate', None) if feature_extractor else None
-            },
-            "emotion_classifier": {
-                "loaded": emotion_classifier is not None,
-                "model_trained": getattr(emotion_classifier, 'model', None) is not None if emotion_classifier else False,
-                "emotions": getattr(emotion_classifier, 'emotions', None) if emotion_classifier else None
-            },
-            "state_classifier": {
-                "loaded": state_classifier is not None,
-                "emotions_supported": len(getattr(state_classifier, 'EMOTION_CATEGORIES', {})) if state_classifier else 0
-            },
-            "recommendation_engine": {
-                "loaded": recommendation_engine is not None,
-                "emotion_profiles": len(getattr(recommendation_engine, 'EMOTION_PROFILES', {})) if recommendation_engine else 0,
-                "communication_strategies": len(getattr(recommendation_engine, 'COMMUNICATION_STRATEGIES', {})) if recommendation_engine else 0
-            }
+            "transcriber": transcriber is not None,
+            "feature_extractor": feature_extractor is not None,
+            "emotion_classifier": emotion_classifier is not None,
+            "state_classifier": state_classifier is not None,
+            "recommendation_engine": recommendation_engine is not None,
         },
-        "directories": {
-            "uploads": str(UPLOAD_DIR),
-            "outputs": str(OUTPUT_DIR),
-            "models": str(MODELS_DIR)
-        }
     }
 
+
 # ============================================================================
-# MAIN ENTRY POINT
+# PYDANTIC SCHEMAS
+# ============================================================================
+
+class ClusterCreate(BaseModel):
+    name: str
+    region: str
+    overall_risk: Optional[str] = "Safe"
+
+class ClusterUpdate(BaseModel):
+    name: Optional[str] = None
+    region: Optional[str] = None
+    overall_risk: Optional[str] = None
+
+class AgentCreate(BaseModel):
+    cluster_id: int
+    name: str
+    email: str
+    role: Optional[str] = "CSR"
+    risk_level: Optional[str] = "Safe"
+
+class AgentUpdate(BaseModel):
+    cluster_id: Optional[int] = None
+    name: Optional[str] = None
+    email: Optional[str] = None
+    role: Optional[str] = None
+    risk_level: Optional[str] = None
+    is_active: Optional[bool] = None
+
+class CallUpdate(BaseModel):
+    agent_id: Optional[int] = None
+    call_date: Optional[date] = None
+    upload_status: Optional[str] = None
+
+
+# ============================================================================
+# CLUSTERS
+# ============================================================================
+
+@app.get("/clusters")
+def list_clusters(db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    clusters = db.query(models.Cluster).all()
+    result = []
+    today = date.today()
+    for c in clusters:
+        agents = db.query(models.Agent).filter(models.Agent.cluster_id == c.id).all()
+        calls_today = db.query(func.count(models.Call.id)).filter(
+            models.Call.cluster_id == c.id, models.Call.call_date == today
+        ).scalar() or 0
+        total_calls = db.query(func.count(models.Call.id)).filter(
+            models.Call.cluster_id == c.id
+        ).scalar() or 0
+        result.append({
+            "id": c.id,
+            "name": c.name,
+            "region": c.region,
+            "overall_risk": c.overall_risk,
+            "agent_count": len(agents),
+            "risky_agents": sum(1 for a in agents if a.risk_level == "Risky"),
+            "medium_agents": sum(1 for a in agents if a.risk_level == "Medium"),
+            "safe_agents": sum(1 for a in agents if a.risk_level == "Safe"),
+            "calls_today": calls_today,
+            "total_calls": total_calls,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+        })
+    return result
+
+
+@app.get("/clusters/{cluster_id}")
+def get_cluster(cluster_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    if not c:
+        raise HTTPException(404, detail="Cluster not found")
+    return c
+
+
+@app.post("/clusters", status_code=201)
+def create_cluster(payload: ClusterCreate, db: Session = Depends(get_db)):
+    if db.query(models.Cluster).filter(models.Cluster.name == payload.name).first():
+        raise HTTPException(400, detail="Cluster name already exists")
+    c = models.Cluster(**payload.model_dump())
+    db.add(c); db.commit(); db.refresh(c)
+    return c
+
+
+@app.put("/clusters/{cluster_id}")
+def update_cluster(cluster_id: int, payload: ClusterUpdate, db: Session = Depends(get_db)):
+    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    if not c:
+        raise HTTPException(404, detail="Cluster not found")
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(c, k, v)
+    db.commit(); db.refresh(c)
+    return c
+
+
+@app.delete("/clusters/{cluster_id}", status_code=204)
+def delete_cluster(cluster_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    if not c:
+        raise HTTPException(404, detail="Cluster not found")
+    db.delete(c); db.commit()
+
+
+# ============================================================================
+# AGENTS
+# ============================================================================
+
+@app.get("/agents")
+def list_agents(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    q = db.query(models.Agent)
+    if cluster_id:
+        q = q.filter(models.Agent.cluster_id == cluster_id)
+    today = date.today()
+    result = []
+    for a in q.all():
+        calls_today = db.query(func.count(models.Call.id)).filter(
+            models.Call.agent_id == a.id, models.Call.call_date == today
+        ).scalar() or 0
+        total_calls = db.query(func.count(models.Call.id)).filter(
+            models.Call.agent_id == a.id
+        ).scalar() or 0
+        result.append({
+            "id": a.id,
+            "name": a.name,
+            "email": a.email,
+            "role": a.role,
+            "risk_level": a.risk_level,
+            "is_active": a.is_active,
+            "cluster_id": a.cluster_id,
+            "cluster_name": a.cluster.name if a.cluster else None,
+            "calls_today": calls_today,
+            "total_calls": total_calls,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        })
+    return result
+
+
+@app.get("/agents/{agent_id}")
+def get_agent(agent_id: int, db: Session = Depends(get_db)):
+    a = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not a:
+        raise HTTPException(404, detail="Agent not found")
+    return a
+
+
+@app.post("/agents", status_code=201)
+def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
+    if db.query(models.Agent).filter(models.Agent.email == payload.email).first():
+        raise HTTPException(400, detail="Email already in use")
+    if not db.query(models.Cluster).filter(models.Cluster.id == payload.cluster_id).first():
+        raise HTTPException(404, detail="Cluster not found")
+    a = models.Agent(**payload.model_dump())
+    db.add(a); db.commit(); db.refresh(a)
+    return a
+
+
+@app.put("/agents/{agent_id}")
+def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depends(get_db)):
+    a = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not a:
+        raise HTTPException(404, detail="Agent not found")
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(a, k, v)
+    db.commit(); db.refresh(a)
+    return a
+
+
+@app.delete("/agents/{agent_id}", status_code=204)
+def delete_agent(agent_id: int, db: Session = Depends(get_db)):
+    a = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+    if not a:
+        raise HTTPException(404, detail="Agent not found")
+    db.delete(a); db.commit()
+
+
+# ============================================================================
+# CALLS
+# ============================================================================
+
+@app.get("/calls")
+def list_calls(
+    cluster_id: Optional[int] = None,
+    agent_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+):
+    from sqlalchemy.orm import joinedload
+    q = db.query(models.Call).options(
+        joinedload(models.Call.agent),
+        joinedload(models.Call.cluster),
+        joinedload(models.Call.analysis_result).joinedload(models.AnalysisResult.recommendation),
+    )
+    if cluster_id:
+        q = q.filter(models.Call.cluster_id == cluster_id)
+    if agent_id:
+        q = q.filter(models.Call.agent_id == agent_id)
+
+    result = []
+    for c in q.order_by(models.Call.created_at.desc()).all():
+        ar  = c.analysis_result
+        rec = ar.recommendation if ar else None
+        result.append({
+            "id": c.id,
+            "uuid": c.uuid,
+            "filename": c.filename,
+            "file_size": c.file_size,
+            "duration_sec": c.duration_sec,
+            "upload_status": c.upload_status,
+            "call_date": c.call_date.isoformat() if c.call_date else None,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "agent": {"id": c.agent.id, "name": c.agent.name, "email": c.agent.email} if c.agent else None,
+            "cluster": {"id": c.cluster.id, "name": c.cluster.name} if c.cluster else None,
+            "analysis": {
+                "predicted_emotion": ar.predicted_emotion,
+                "confidence": float(ar.confidence),
+                "risk_level": ar.risk_level,
+                "transcription_text": ar.transcription_text,
+                "valence": ar.valence,
+                "arousal": ar.arousal,
+            } if ar else None,
+            "recommendation": {
+                "action": rec.action,
+                "urgency": rec.urgency,
+                "reason": rec.reason,
+                "instruction": rec.instruction,
+                "action_color": rec.action_color,
+                "recommended_tone": rec.recommended_tone,
+                "example_phrases": rec.example_phrases,
+                "do_list": rec.do_list,
+                "dont_list": rec.dont_list,
+            } if rec else None,
+        })
+    return result
+
+
+@app.put("/calls/{call_id}")
+def update_call(call_id: int, payload: CallUpdate, db: Session = Depends(get_db)):
+    c = db.query(models.Call).filter(models.Call.id == call_id).first()
+    if not c:
+        raise HTTPException(404, detail="Call not found")
+    for k, v in payload.model_dump(exclude_none=True).items():
+        setattr(c, k, v)
+    db.commit(); db.refresh(c)
+    return c
+
+
+@app.delete("/calls/{call_id}", status_code=204)
+def delete_call(call_id: int, db: Session = Depends(get_db)):
+    c = db.query(models.Call).filter(models.Call.id == call_id).first()
+    if not c:
+        raise HTTPException(404, detail="Call not found")
+    db.delete(c); db.commit()
+
+
+# ============================================================================
+# REPORTS
+# ============================================================================
+
+@app.get("/reports/summary")
+def reports_summary(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    q_calls = db.query(func.count(models.Call.id))
+    q_ar    = db.query(func.count(models.AnalysisResult.id))
+    q_esc   = db.query(func.count(models.Escalation.id))
+    if cluster_id:
+        q_calls = q_calls.filter(models.Call.cluster_id == cluster_id)
+        q_ar    = q_ar.join(models.Call).filter(models.Call.cluster_id == cluster_id)
+        q_esc   = q_esc.join(models.Call, models.Escalation.call_id == models.Call.id).filter(models.Call.cluster_id == cluster_id)
+    return {
+        "total_calls": q_calls.scalar() or 0,
+        "analyzed_calls": q_ar.scalar() or 0,
+        "escalations": q_esc.scalar() or 0,
+        "total_agents": db.query(func.count(models.Agent.id)).scalar() or 0,
+        "risky_agents": db.query(func.count(models.Agent.id)).filter(models.Agent.risk_level == "Risky").scalar() or 0,
+    }
+
+
+@app.get("/reports/emotion-distribution")
+def reports_emotion_distribution(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    q = db.query(models.AnalysisResult.predicted_emotion, func.count(models.AnalysisResult.id).label("count"))
+    if cluster_id:
+        q = q.join(models.Call).filter(models.Call.cluster_id == cluster_id)
+    rows = q.group_by(models.AnalysisResult.predicted_emotion).all()
+    return [{"emotion": r.predicted_emotion, "count": r.count} for r in rows]
+
+
+@app.get("/reports/emotion-trend")
+def reports_emotion_trend(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func, extract
+    from datetime import timedelta
+    cutoff = date.today() - timedelta(days=365)
+    q = db.query(
+        extract("year",  models.Call.call_date).label("year"),
+        extract("month", models.Call.call_date).label("month"),
+        models.AnalysisResult.predicted_emotion,
+        func.count(models.AnalysisResult.id).label("count"),
+    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(models.Call.call_date >= cutoff)
+    if cluster_id:
+        q = q.filter(models.Call.cluster_id == cluster_id)
+    rows = q.group_by("year", "month", models.AnalysisResult.predicted_emotion).all()
+    pivot: dict = {}
+    for r in rows:
+        label = f"{int(r.year)}-{int(r.month):02d}"
+        pivot.setdefault(label, {"month": label})[r.predicted_emotion] = r.count
+    return sorted(pivot.values(), key=lambda x: x["month"])
+
+
+@app.get("/reports/risk-trend")
+def reports_risk_trend(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func, extract
+    from datetime import timedelta
+    cutoff = date.today() - timedelta(days=365)
+    q = db.query(
+        extract("year",  models.Call.call_date).label("year"),
+        extract("month", models.Call.call_date).label("month"),
+        models.AnalysisResult.risk_level,
+        func.count(models.AnalysisResult.id).label("count"),
+    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(models.Call.call_date >= cutoff)
+    if cluster_id:
+        q = q.filter(models.Call.cluster_id == cluster_id)
+    rows = q.group_by("year", "month", models.AnalysisResult.risk_level).all()
+    pivot: dict = {}
+    for r in rows:
+        label = f"{int(r.year)}-{int(r.month):02d}"
+        pivot.setdefault(label, {"month": label})[r.risk_level] = r.count
+    return sorted(pivot.values(), key=lambda x: x["month"])
+
+
+@app.get("/reports/call-volume")
+def reports_call_volume(db: Session = Depends(get_db)):
+    from sqlalchemy import func, extract
+    from datetime import timedelta
+    cutoff = date.today() - timedelta(days=365)
+    rows = db.query(
+        extract("year",  models.Call.call_date).label("year"),
+        extract("month", models.Call.call_date).label("month"),
+        models.Cluster.name.label("cluster"),
+        func.count(models.Call.id).label("count"),
+    ).join(models.Cluster, models.Call.cluster_id == models.Cluster.id).filter(
+        models.Call.call_date >= cutoff
+    ).group_by("year", "month", models.Cluster.name).all()
+    pivot: dict = {}
+    for r in rows:
+        label = f"{int(r.year)}-{int(r.month):02d}"
+        pivot.setdefault(label, {"month": label})[r.cluster] = r.count
+    return sorted(pivot.values(), key=lambda x: x["month"])
+
+
+@app.get("/reports/agent-risk-scores")
+def reports_agent_risk_scores(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
+    from sqlalchemy import func
+    q = db.query(models.Agent)
+    if cluster_id:
+        q = q.filter(models.Agent.cluster_id == cluster_id)
+    result = []
+    for a in q.all():
+        counts = db.query(
+            models.AnalysisResult.risk_level, func.count(models.AnalysisResult.id).label("cnt")
+        ).join(models.Call, models.AnalysisResult.call_id == models.Call.id).filter(
+            models.Call.agent_id == a.id
+        ).group_by(models.AnalysisResult.risk_level).all()
+        rm = {r.risk_level: r.cnt for r in counts}
+        total = sum(rm.values()) or 1
+        result.append({
+            "agent_id": a.id,
+            "agent_name": a.name,
+            "cluster": a.cluster.name if a.cluster else None,
+            "risk_level": a.risk_level,
+            "critical": rm.get("Critical", 0),
+            "high": rm.get("High", 0),
+            "medium": rm.get("Medium", 0),
+            "low": rm.get("Low", 0),
+            "total_calls": total,
+            "risk_score": round(
+                (rm.get("Critical", 0)*4 + rm.get("High", 0)*3 + rm.get("Medium", 0)*2 + rm.get("Low", 0))
+                / total * 25, 1
+            ),
+        })
+    return sorted(result, key=lambda x: -x["risk_score"])
+
+
+# ============================================================================
+# ENTRY POINT
 # ============================================================================
 
 if __name__ == "__main__":
-    print("\n" + "="*70)
-    print("CSR CALL RECORDING ANALYSIS API")
-    print("="*70)
-    print("\nStarting server...")
-    print("API Documentation: http://localhost:8000/docs")
-    print("Health Check: http://localhost:8000/health")
-    print("\nPress CTRL+C to stop")
-    print("="*70 + "\n")
-    
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
-    )
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")

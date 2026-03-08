@@ -20,6 +20,17 @@ except ImportError:
     whisper = None
     torch = None
 
+try:
+    import librosa
+    import soundfile as sf
+    import numpy as np
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
+    librosa = None
+    sf = None
+    np = None
+
 warnings.filterwarnings('ignore')
 
 
@@ -107,7 +118,97 @@ class CSRCallTranscriber:
         print(f"Word count: {transcription_data['word_count']}\n")
         
         return transcription_data
-    
+
+    def detect_speakers(self, audio_path):
+        """
+        Detect agent vs caller in call recording
+
+        Logic:
+        - Stereo: Separate left/right channels, first speaker = agent
+        - Mono: Both speakers combined, analyze all audio
+
+        Args:
+            audio_path (str): Path to audio file
+
+        Returns:
+            dict: Speaker information and caller audio path
+        """
+        if not LIBROSA_AVAILABLE:
+            print("⚠️  librosa not available. Skipping speaker diarization.")
+            return {
+                'mode': 'mono',
+                'agent_channel': None,
+                'caller_channel': None,
+                'caller_audio_path': audio_path,
+                'message': 'Speaker diarization disabled - analyzing full audio'
+            }
+
+        print("\n[Speaker Diarization] Detecting agent vs caller...")
+
+        # Load audio with stereo channels
+        audio, sr = librosa.load(audio_path, sr=None, mono=False)
+
+        # Check if stereo or mono
+        if len(audio.shape) == 1:
+            # Mono audio - analyze everything
+            print("✓ Detected: MONO audio")
+            print("  Strategy: Analyzing full recording (both speakers)")
+            return {
+                'mode': 'mono',
+                'agent_channel': None,
+                'caller_channel': None,
+                'caller_audio_path': audio_path,
+                'message': 'Mono audio - analyzing both agent and caller'
+            }
+
+        # Stereo audio - separate channels
+        print("✓ Detected: STEREO audio")
+        left_channel = audio[0]
+        right_channel = audio[1]
+
+        # Detect first speaker by finding which channel has first significant audio
+        # Use energy threshold to find first speech
+        frame_length = int(sr * 0.1)  # 100ms frames
+        left_energy = librosa.feature.rms(y=left_channel, frame_length=frame_length)[0]
+        right_energy = librosa.feature.rms(y=right_channel, frame_length=frame_length)[0]
+
+        # Find first frame with significant energy (speech started)
+        threshold = 0.02  # Energy threshold for speech detection
+        left_start = np.where(left_energy > threshold)[0]
+        right_start = np.where(right_energy > threshold)[0]
+
+        left_first_frame = left_start[0] if len(left_start) > 0 else float('inf')
+        right_first_frame = right_start[0] if len(right_start) > 0 else float('inf')
+
+        # First speaker = Agent
+        if left_first_frame < right_first_frame:
+            agent_channel = 'left'
+            caller_channel = 'right'
+            caller_audio = right_channel
+            print(f"  Agent detected on: LEFT channel (spoke first)")
+            print(f"  Caller detected on: RIGHT channel")
+        else:
+            agent_channel = 'right'
+            caller_channel = 'left'
+            caller_audio = left_channel
+            print(f"  Agent detected on: RIGHT channel (spoke first)")
+            print(f"  Caller detected on: LEFT channel")
+
+        # Save caller-only audio to temporary file for emotion analysis
+        temp_caller_path = str(Path(audio_path).parent / f"temp_caller_{Path(audio_path).name}")
+        sf.write(temp_caller_path, caller_audio, sr)
+        print(f"  Caller audio extracted: {temp_caller_path}")
+
+        return {
+            'mode': 'stereo',
+            'agent_channel': agent_channel,
+            'caller_channel': caller_channel,
+            'caller_audio_path': temp_caller_path,
+            'agent_start_frame': int(left_first_frame if agent_channel == 'left' else right_first_frame),
+            'caller_start_frame': int(right_first_frame if caller_channel == 'right' else left_first_frame),
+            'message': f'Agent on {agent_channel}, Caller on {caller_channel} - analyzing caller only'
+        }
+
     def _process_transcription(self, result, audio_path):
         """Process raw Whisper output into structured format"""
         

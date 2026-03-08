@@ -139,7 +139,7 @@ class MFCCFeatureExtractor:
         print(
             f"  Shape: {mfccs.shape} ({self.n_mfcc} coefficients × {mfccs.shape[1]} frames)")
         print(
-            f"  Mean MFCC range: [{mfcc_mean.min():.2f}, {mfcc_mean.max():.2f}]\n")
+            f"  Mean MFCC range: [{float(mfcc_mean.min()):.2f}, {float(mfcc_mean.max()):.2f}]\n")
 
         return {
             'mfcc': mfccs,
@@ -203,9 +203,9 @@ class MFCCFeatureExtractor:
             y=audio, frame_length=self.n_fft, hop_length=self.hop_length)[0]
 
         print(f"✓ Spectral features extracted")
-        print(f"  Spectral Centroid: {np.mean(spectral_centroids):.2f} Hz")
-        print(f"  Zero Crossing Rate: {np.mean(zero_crossing_rate):.4f}")
-        print(f"  RMS Energy: {np.mean(rms):.4f}\n")
+        print(f"  Spectral Centroid: {float(np.mean(spectral_centroids)):.2f} Hz")
+        print(f"  Zero Crossing Rate: {float(np.mean(zero_crossing_rate)):.4f}")
+        print(f"  RMS Energy: {float(np.mean(rms)):.4f}\n")
 
         return {
             'spectral_centroid': spectral_centroids,
@@ -266,9 +266,9 @@ class MFCCFeatureExtractor:
             y=audio, frame_length=self.n_fft, hop_length=self.hop_length)[0]
 
         print(f"✓ Prosodic features extracted")
-        print(f"  Mean Pitch: {np.mean(pitch_values):.2f} Hz")
-        print(f"  Pitch Std: {np.std(pitch_values):.2f} Hz")
-        print(f"  Tempo: {tempo:.2f} BPM\n")
+        print(f"  Mean Pitch: {float(np.mean(pitch_values)):.2f} Hz")
+        print(f"  Pitch Std: {float(np.std(pitch_values)):.2f} Hz")
+        print(f"  Tempo: {float(tempo):.2f} BPM\n")
 
         return {
             'pitch_values': pitch_values,
@@ -333,9 +333,43 @@ class MFCCFeatureExtractor:
         print(f"✓ Feature vector created")
         print(f"  Total features: {len(feature_vector)}")
         print(
-            f"  Feature range: [{feature_vector.min():.2f}, {feature_vector.max():.2f}]\n")
+            f"  Feature range: [{float(feature_vector.min()):.2f}, {float(feature_vector.max()):.2f}]\n")
 
         return feature_vector
+
+    def extract_features(self, audio_path):
+        """
+        Extract feature vector from audio file (for ML model predictions)
+
+        Args:
+            audio_path (str): Path to audio file
+
+        Returns:
+            np.array: Feature vector for ML model, or None if extraction fails
+        """
+        try:
+            # Load audio
+            audio, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+
+            # Extract MFCC features
+            mfcc_features = self.extract_mfcc(audio, sr)
+
+            # Extract spectral features
+            spectral_features = self.extract_spectral_features(audio, sr)
+
+            # Extract prosodic features
+            prosodic_features = self.extract_prosodic_features(audio, sr)
+
+            # Create feature vector for ML
+            feature_vector = self.create_feature_vector(
+                mfcc_features, spectral_features, prosodic_features
+            )
+
+            return feature_vector
+
+        except Exception as e:
+            print(f"Error extracting features from {audio_path}: {e}")
+            return None
 
     def extract_all_features(self, audio_path):
         """

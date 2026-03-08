@@ -547,9 +547,13 @@ class CSREmotionClassifier:
             emotion, self.ACTION_RECOMMENDATIONS['neutral']
         )
 
+        # Determine action required (CONTINUE, REST, or ESCALATE)
+        action_directive = self._determine_action_directive(emotion, confidence, emotional_state)
+
         # Compile comprehensive recommendation
         recommendation = {
             'timestamp': datetime.now().isoformat(),
+            'action_required': action_directive,  # NEW: Clear action directive
             'emotion_context': {
                 'primary_emotion': emotional_state['primary_emotion']['name'],
                 'confidence': confidence,
@@ -579,6 +583,100 @@ class CSREmotionClassifier:
         }
 
         return recommendation
+
+    def _determine_action_directive(self, emotion, confidence, emotional_state):
+        """
+        Determine clear action directive for CSR
+
+        Returns one of three actions:
+        - CONTINUE: Caller is calm, proceed with normal service
+        - REST: Caller needs a brief pause to calm down
+        - ESCALATE: Critical situation, transfer to supervisor immediately
+
+        Args:
+            emotion (str): Detected emotion
+            confidence (float): Prediction confidence
+            emotional_state (dict): Full emotional state analysis
+
+        Returns:
+            dict: Action directive with explanation
+        """
+        severity = emotional_state['primary_emotion']['severity']
+        risk_level = emotional_state['psychological_indicators']['risk_level']
+
+        # ESCALATE: Critical emotions with high confidence
+        if emotion == 'angry' and confidence >= 0.65:
+            return {
+                'action': 'ESCALATE',
+                'reason': 'Customer is angry and requires immediate supervisor intervention',
+                'instruction': 'Transfer to supervisor or team lead immediately. Brief them on the situation before transfer.',
+                'urgency': 'IMMEDIATE',
+                'color': 'red'
+            }
+
+        # ESCALATE: High risk regardless of emotion
+        if risk_level == 'critical':
+            return {
+                'action': 'ESCALATE',
+                'reason': 'Critical risk level detected - potential for customer churn or escalation',
+                'instruction': 'Alert supervisor and prepare for immediate escalation if situation doesn\'t improve within 2 minutes.',
+                'urgency': 'HIGH',
+                'color': 'red'
+            }
+
+        # REST: Frustrated customer with moderate-high confidence
+        if emotion == 'frustrated' and confidence >= 0.60:
+            return {
+                'action': 'REST',
+                'reason': 'Customer is frustrated and may benefit from a brief pause',
+                'instruction': 'Offer to "look into this right away" and put on hold for 15-30 seconds to give customer time to calm down. Return with a clear solution.',
+                'urgency': 'MEDIUM',
+                'color': 'orange'
+            }
+
+        # REST: Very sad customer
+        if emotion == 'sad' and confidence >= 0.55:
+            return {
+                'action': 'REST',
+                'reason': 'Customer is emotionally distressed and needs gentle pacing',
+                'instruction': 'Slow down the conversation pace. Give customer time to process information. Ask: "Would you like a moment before we continue?"',
+                'urgency': 'MEDIUM',
+                'color': 'orange'
+            }
+
+        # REST: Mixed negative emotions (confused emotional state)
+        negative_emotions = ['angry', 'frustrated', 'sad']
+        negative_prob_sum = sum(
+            emotional_state['all_emotion_probabilities'].get(e, 0)
+            for e in negative_emotions
+        )
+        if negative_prob_sum >= 0.70:  # 70% negative emotions combined
+            return {
+                'action': 'REST',
+                'reason': 'Customer showing mixed negative emotions - uncertain emotional state',
+                'instruction': 'Pause and validate customer\'s feelings: "I can hear this has been difficult. Let\'s take a moment to figure out the best solution."',
+                'urgency': 'MEDIUM',
+                'color': 'orange'
+            }
+
+        # CONTINUE: Positive or neutral emotions
+        if emotion in ['happy', 'satisfied', 'neutral']:
+            return {
+                'action': 'CONTINUE',
+                'reason': f'Customer is {emotion} - maintain current approach',
+                'instruction': 'Continue providing excellent service. Maintain professionalism and efficiency.',
+                'urgency': 'LOW',
+                'color': 'green'
+            }
+
+        # DEFAULT: CONTINUE with caution
+        return {
+            'action': 'CONTINUE',
+            'reason': 'Emotional state is manageable - proceed with empathy',
+            'instruction': 'Monitor customer\'s tone carefully. Be ready to adjust approach if emotional state changes.',
+            'urgency': 'LOW',
+            'color': 'yellow'
+        }
 
     def _generate_success_metrics(self, emotion):
         """Generate success metrics for interaction"""
