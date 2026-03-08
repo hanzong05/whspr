@@ -1,3 +1,6 @@
+# HuggingFace Spaces
+gradio>=4.0.0
+
 # FastAPI & Server
 fastapi==0.110.0
 uvicorn[standard]==0.29.0

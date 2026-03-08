@@ -111,19 +111,26 @@ state_classifier = None
 recommendation_engine = None
 
 
-def initialize_models():
-    global transcriber, feature_extractor, emotion_classifier, state_classifier, recommendation_engine
-
-    # Imports are done here so they run in the background thread,
-    # not at module load time — keeps uvicorn port-ready instantly.
+def load_whisper():
+    """Load whisper + torch on first /analyze call (too heavy for startup on free tier)."""
+    global transcriber
+    if transcriber is not None:
+        return True
     try:
         from whisper_asr_module import CSRCallTranscriber
         transcriber = CSRCallTranscriber(model_size="base", language="en")
         modules_status["whisper"] = True
-        print("✅  whisper loaded")
+        print("✅  whisper loaded (lazy)")
+        return True
     except Exception as e:
         print(f"❌  whisper failed: {e}")
+        return False
 
+
+def initialize_models():
+    global feature_extractor, emotion_classifier, state_classifier, recommendation_engine
+
+    # Whisper/torch skipped here — loaded lazily in /analyze to avoid OOM on 512MB.
     try:
         from mfcc_feature_extraction import MFCCFeatureExtractor as _MFCC
         feature_extractor = _MFCC()
@@ -240,8 +247,11 @@ async def analyze_audio(
     agent_id: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = None,
 ):
+    # Load whisper lazily (torch/whisper too large for startup on free tier)
+    if not load_whisper():
+        raise HTTPException(503, detail="Whisper/transcriber failed to load")
+
     required = {
-        "transcriber": transcriber,
         "feature_extractor": feature_extractor,
         "emotion_classifier": emotion_classifier,
         "state_classifier": state_classifier,
