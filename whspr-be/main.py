@@ -120,15 +120,17 @@ def initialize_models():
         from whisper_asr_module import CSRCallTranscriber
         transcriber = CSRCallTranscriber(model_size="base", language="en")
         modules_status["whisper"] = True
-    except Exception:
-        pass
+        print("✅  whisper loaded")
+    except Exception as e:
+        print(f"❌  whisper failed: {e}")
 
     try:
         from mfcc_feature_extraction import MFCCFeatureExtractor as _MFCC
         feature_extractor = _MFCC()
         modules_status["mfcc"] = True
-    except Exception:
-        pass
+        print("✅  mfcc loaded")
+    except Exception as e:
+        print(f"❌  mfcc failed: {e}")
 
     try:
         from ml_classifier import EmotionClassifier as _EC
@@ -151,22 +153,25 @@ def initialize_models():
                 print(f"⚠️  Could not load model from Supabase: {dl_err}")
         else:
             print("⚠️  Supabase client not configured — emotion model not loaded.")
-    except Exception:
-        pass
+        print("✅  emotion_classifier loaded")
+    except Exception as e:
+        print(f"❌  emotion_classifier failed: {e}")
 
     try:
         from emotional_state_classifier import EmotionalStateClassifier as _ESC
         state_classifier = _ESC()
         modules_status["state_classifier"] = True
-    except Exception:
-        pass
+        print("✅  state_classifier loaded")
+    except Exception as e:
+        print(f"❌  state_classifier failed: {e}")
 
     try:
         from csr_emotion_recommendations import CSREmotionClassifier as _CEC
         recommendation_engine = _CEC()
         modules_status["recommendation_engine"] = True
-    except Exception:
-        pass
+        print("✅  recommendation_engine loaded")
+    except Exception as e:
+        print(f"❌  recommendation_engine failed: {e}")
 
 
 @app.on_event("startup")
