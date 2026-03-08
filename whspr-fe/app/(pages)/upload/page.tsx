@@ -161,9 +161,9 @@ function AgentSelectModal({
 
 export default function RecordingUpload() {
   const [isDragging, setIsDragging] = useState(false);
-  const [selectedFiles, setSelectedFiles] = useState([]);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [uploading, setUploading] = useState(false);
-  const [uploadResults, setUploadResults] = useState([]);
+  const [uploadResults, setUploadResults] = useState<Record<string, unknown>[]>([]);
   const [showAgentModal, setShowAgentModal] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<(typeof AGENTS)[0] | null>(null);
 
@@ -198,12 +198,12 @@ export default function RecordingUpload() {
     }
   }, []);
 
-  const handleFileSelect = (e) => {
-    const files = Array.from(e.target.files);
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []) as File[];
     setSelectedFiles((prev) => [...prev, ...files]);
   };
 
-  const removeFile = (index) => {
+  const removeFile = (index: number) => {
     setSelectedFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
