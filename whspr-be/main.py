@@ -199,9 +199,23 @@ def initialize_models():
 
 @app.on_event("startup")
 async def startup_event():
-    import threading
-    thread = threading.Thread(target=initialize_models, daemon=True)
-    thread.start()
+    global transcriber
+
+    print("🚀 Loading ALL models at startup...")
+
+    # ✅ Load Whisper (REMOVE lazy)
+    try:
+        from whisper_asr_module import CSRCallTranscriber
+        transcriber = CSRCallTranscriber(model_size="base", language="en")
+        modules_status["whisper"] = True
+        print("✅ Whisper loaded")
+    except Exception as e:
+        print(f"❌ Whisper failed: {e}")
+
+    # ✅ Load other models
+    initialize_models()
+
+    print("🔥 ALL MODELS READY")
 
 
 # ============================================================================
@@ -276,8 +290,8 @@ async def analyze_audio(
     agent_id: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = None,
 ):
-    if not load_whisper():
-        raise HTTPException(503, detail="Whisper/transcriber failed to load")
+    if not transcriber:
+        raise HTTPException(503, detail="Whisper not loaded")
 
     required = {
         "feature_extractor": feature_extractor,
