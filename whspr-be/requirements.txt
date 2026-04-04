@@ -1,12 +1,9 @@
-# HuggingFace Spaces
-gradio>=4.0.0
-
 # FastAPI & Server
 fastapi==0.110.0
 uvicorn[standard]==0.29.0
 python-multipart==0.0.9
 
-# Machine Learning (3.13 compatible)
+# Machine Learning
 scikit-learn>=1.7.0
 numpy>=2.0
 pandas>=2.2
@@ -26,10 +23,8 @@ seaborn>=0.13
 
 # Database
 sqlalchemy>=2.0
-psycopg2-binary>=2.9
-
-# Supabase Storage
-supabase>=2.0
+pymysql>=1.1.0
+cryptography>=42.0
 
 # Auth / Password hashing
 passlib[bcrypt]>=1.7.4

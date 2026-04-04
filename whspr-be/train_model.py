@@ -33,6 +33,23 @@ EMOTION_MAPPING = {
     '07': 'frustrated',  # disgust -> frustrated
     '08': 'satisfied',  # surprised -> satisfied
 
+    # TESS (Toronto Emotional Speech Set) mapping
+    'angry': 'angry',
+    'disgust': 'frustrated',
+    'fear': 'frustrated',
+    'happy': 'happy',
+    'neutral': 'neutral',
+    'pleasant_surprise': 'satisfied',
+    'sad': 'sad',
+
+    # CREMA-D (Crowd-sourced Emotional Multimodal Actors Dataset) mapping
+    'ANG': 'angry',
+    'DIS': 'frustrated',
+    'FEA': 'frustrated',
+    'HAP': 'happy',
+    'NEU': 'neutral',
+    'SAD': 'sad',
+
     # Or direct mapping for simpler datasets
     'angry': 'angry',
     'happy': 'happy',
@@ -46,6 +63,7 @@ EMOTION_MAPPING = {
 # TRAINING FUNCTIONS
 # ============================================================================
 
+
 def load_dataset_from_folder(audio_folder, label_mapping=None):
     """
     Load audio files from a folder structure like:
@@ -58,9 +76,14 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
             file2.wav
         etc.
 
+    Supports datasets like RAVDESS, TESS, CREMA-D, and custom labeled folders.
+    For RAVDESS: use emotion codes (01, 02, etc.) as folder names.
+    For TESS: use emotion names (angry, disgust, fear, happy, neutral, pleasant_surprise, sad).
+    For CREMA-D: use emotion codes (ANG, DIS, FEA, HAP, NEU, SAD).
+
     Args:
         audio_folder (str): Path to folder containing emotion subfolders
-        label_mapping (dict): Optional mapping to rename labels
+        label_mapping (dict): Optional mapping to rename labels (uses EMOTION_MAPPING if None)
 
     Returns:
         list: List of (audio_path, emotion_label) tuples
@@ -78,15 +101,24 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
     # Scan for emotion folders
     for emotion_folder in audio_folder.iterdir():
         if emotion_folder.is_dir():
-            emotion_name = emotion_folder.name.lower()
+            raw_name = emotion_folder.name.strip()
+            lower_name = raw_name.lower()
+            upper_name = raw_name.upper()
 
-            # Apply mapping if provided
-            if label_mapping and emotion_name in label_mapping:
-                emotion_label = label_mapping[emotion_name]
+            # use global mapping if not provided
+            if label_mapping is None:
+                label_mapping = EMOTION_MAPPING
+
+            if raw_name in label_mapping:
+                emotion_label = label_mapping[raw_name]
+            elif lower_name in label_mapping:
+                emotion_label = label_mapping[lower_name]
+            elif upper_name in label_mapping:
+                emotion_label = label_mapping[upper_name]
             else:
-                emotion_label = emotion_name
+                emotion_label = lower_name
 
-            print(f"📁 Scanning {emotion_name} folder → Label: {emotion_label}")
+            print(f"📁 Scanning {raw_name} folder → Label: {emotion_label}")
 
             # Find all audio files
             audio_files = []
@@ -186,7 +218,13 @@ def train_and_save_model(X, y, classifier_type='svm', save_path='models/'):
     classifier = EmotionClassifier(classifier_type=classifier_type)
 
     # Train
-    results = classifier.train(X, y, test_size=0.2)
+    classifier.train(
+    X, y,
+    test_size=0.2,
+    C=50,
+    gamma=0.01,
+    kernel='rbf'
+)
 
     # Save model
     save_path = Path(save_path)
@@ -287,6 +325,9 @@ def main():
 
     elif choice == '2':
         # Use existing folder
+        print(
+            "\nSupported datasets: RAVDESS, TESS, CREMA-D, or any custom folder structure")
+        print("Folder should contain subfolders named with emotion labels (e.g., angry/, happy/, etc.)")
         data_folder = input("\nEnter path to your dataset folder: ").strip()
 
         if not os.path.exists(data_folder):
@@ -344,7 +385,8 @@ def main():
     # Train each classifier
     results_summary = []
     for clf_type in classifiers_to_train:
-        classifier, results = train_and_save_model(X, y, classifier_type=clf_type)
+        classifier, results = train_and_save_model(
+            X, y, classifier_type=clf_type)
         results_summary.append({
             'type': clf_type,
             'accuracy': results['accuracy'],
@@ -410,7 +452,8 @@ def train_from_labeled_recordings(data_folder, classifiers_to_train=None):
     # Train each classifier
     results_summary = []
     for clf_type in classifiers_to_train:
-        classifier, results = train_and_save_model(X, y, classifier_type=clf_type)
+        classifier, results = train_and_save_model(
+            X, y, classifier_type=clf_type)
         results_summary.append({
             'type': clf_type,
             'accuracy': results['accuracy'],

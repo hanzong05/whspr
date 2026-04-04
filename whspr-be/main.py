@@ -17,24 +17,11 @@ from datetime import datetime, date
 import json
 import uuid as uuid_lib
 from sqlalchemy.orm import Session
-
-# ============================================================================
-# SUPABASE STORAGE (soft import)
-# ============================================================================
-
+from pydub import AudioSegment
+import bcrypt
 try:
     from dotenv import load_dotenv as _load_dotenv
     _load_dotenv()
-except Exception:
-    pass
-
-supabase_client = None
-try:
-    from supabase import create_client
-    _supa_url = os.getenv("SUPABASE_URL")
-    _supa_key = os.getenv("SUPABASE_SERVICE_KEY")
-    if _supa_url and _supa_key and "YOUR-PROJECT" not in _supa_url:
-        supabase_client = create_client(_supa_url, _supa_key)
 except Exception:
     pass
 
@@ -59,8 +46,7 @@ except Exception as _db_err:
     print(f"⚠️  Database not available: {_db_err}")
 
 # ============================================================================
-# ML MODULES — imported lazily inside initialize_models() (background thread)
-# so they don't block uvicorn from binding the port on startup
+# ML MODULES
 # ============================================================================
 
 modules_status = {
@@ -112,7 +98,6 @@ recommendation_engine = None
 
 
 def load_whisper():
-    """Load whisper + torch on first /analyze call (too heavy for startup on free tier)."""
     global transcriber
     if transcriber is not None:
         return True
@@ -127,10 +112,53 @@ def load_whisper():
         return False
 
 
+def convert_to_wav(input_path: Path) -> Path:
+    """
+    Convert any audio file to WAV using multiple strategies.
+    Returns the WAV path on success, or the original path as fallback.
+    """
+    if input_path.suffix.lower() == ".wav":
+        return input_path
+
+    wav_path = input_path.with_suffix(".wav")
+
+    # Strategy 1: ogg (Chrome/Edge send opus-in-ogg or opus-in-webm)
+    try:
+        audio = AudioSegment.from_file(str(input_path), format="ogg")
+        audio.export(str(wav_path), format="wav")
+        print("✅ WAV OK (ogg)")
+        return wav_path
+    except Exception as e1:
+        print(f"⚠️ ogg failed: {e1}")
+
+    # Strategy 2: explicit webm
+    try:
+        audio = AudioSegment.from_file(str(input_path), format="webm")
+        audio.export(str(wav_path), format="wav")
+        print("✅ WAV OK (webm)")
+        return wav_path
+    except Exception as e2:
+        print(f"⚠️ webm failed: {e2}")
+
+    # Strategy 3: auto-detect
+    try:
+        audio = AudioSegment.from_file(str(input_path))
+        audio.export(str(wav_path), format="wav")
+        print("✅ WAV OK (auto)")
+        return wav_path
+    except Exception as e3:
+        print(f"⚠️ All conversions failed, using original: {e3}")
+        return input_path
+
+
+def ensure_wav(input_path: Path) -> Path:
+    """Legacy helper — delegates to convert_to_wav."""
+    return convert_to_wav(input_path)
+
+
 def initialize_models():
     global feature_extractor, emotion_classifier, state_classifier, recommendation_engine
 
-    # Whisper/torch skipped here — loaded lazily in /analyze to avoid OOM on 512MB.
     try:
         from mfcc_feature_extraction import MFCCFeatureExtractor as _MFCC
         feature_extractor = _MFCC()
@@ -143,24 +171,12 @@ def initialize_models():
         from ml_classifier import EmotionClassifier as _EC
         emotion_classifier = _EC()
         modules_status["emotion_classifier"] = True
-        if supabase_client:
-            try:
-                import io, pickle
-                print("⬇️  Loading svm_emotion_model.pkl from Supabase Storage…")
-                res = supabase_client.storage.from_("models").download("svm_emotion_model.pkl")
-                model_data = pickle.load(io.BytesIO(res))
-                emotion_classifier.model = model_data["model"]
-                emotion_classifier.scaler = model_data["scaler"]
-                emotion_classifier.label_encoder = model_data["label_encoder"]
-                emotion_classifier.classifier_type = model_data["classifier_type"]
-                emotion_classifier.training_history = model_data["training_history"]
-                emotion_classifier.is_trained = model_data["is_trained"]
-                print("✅  Model loaded from Supabase Storage.")
-            except Exception as dl_err:
-                print(f"⚠️  Could not load model from Supabase: {dl_err}")
+        model_path = MODELS_DIR / "svm_emotion_model.pkl"
+        if model_path.exists():
+            emotion_classifier.load_model(str(model_path))
+            print("✅  emotion_classifier loaded")
         else:
-            print("⚠️  Supabase client not configured — emotion model not loaded.")
-        print("✅  emotion_classifier loaded")
+            print(f"⚠️  Model file not found at {model_path}")
     except Exception as e:
         print(f"❌  emotion_classifier failed: {e}")
 
@@ -210,6 +226,18 @@ def save_upload_file(upload_file: UploadFile, destination: Path) -> Path:
 
 
 # ============================================================================
+# PASSWORD HELPERS
+# ============================================================================
+
+def _hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def _verify_password(plain: str, hashed: str) -> bool:
+    return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+
+
+# ============================================================================
 # ML ENDPOINTS
 # ============================================================================
 
@@ -226,7 +254,8 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    ready = all([transcriber, feature_extractor, emotion_classifier, state_classifier])
+    ready = all([transcriber, feature_extractor,
+                emotion_classifier, state_classifier])
     return {
         "status": "healthy" if ready else "degraded",
         "timestamp": datetime.now().isoformat(),
@@ -247,7 +276,6 @@ async def analyze_audio(
     agent_id: Optional[int] = Form(None),
     background_tasks: BackgroundTasks = None,
 ):
-    # Load whisper lazily (torch/whisper too large for startup on free tier)
     if not load_whisper():
         raise HTTPException(503, detail="Whisper/transcriber failed to load")
 
@@ -258,7 +286,8 @@ async def analyze_audio(
     }
     missing = [k for k, v in required.items() if v is None]
     if missing:
-        raise HTTPException(503, detail=f"Service not ready. Missing: {', '.join(missing)}")
+        raise HTTPException(
+            503, detail=f"Service not ready. Missing: {', '.join(missing)}")
 
     if not file.filename:
         raise HTTPException(400, detail="No file provided")
@@ -269,33 +298,78 @@ async def analyze_audio(
     try:
         save_upload_file(file, temp_file)
 
-        transcription_result = transcriber.transcribe_call(str(temp_file))
+        # ── Step 1: Convert uploaded file to WAV ──────────────────────────────
+        process_path = convert_to_wav(temp_file)
+
+        # ── Step 2: Transcribe ────────────────────────────────────────────────
+        transcription_result = transcriber.transcribe_call(str(process_path))
+
         if not transcription_result or "error" in transcription_result:
-            raise HTTPException(500, detail=f"Transcription failed: {transcription_result.get('error', 'Unknown')}")
+            raise HTTPException(
+                500, detail=f"Transcription failed: {transcription_result.get('error', 'Unknown')}"
+            )
 
-        speaker_info = transcriber.detect_speakers(str(temp_file))
-        features = feature_extractor.extract_features(speaker_info["caller_audio_path"])
+        # ── Step 3: Speaker diarization (uses the already-converted WAV) ──────
+        speaker_info = transcriber.detect_speakers(str(process_path))
+
+        caller_audio_path = Path(speaker_info["caller_audio_path"])
+
+        if not caller_audio_path.exists() or caller_audio_path.stat().st_size == 0:
+            raise HTTPException(
+                500, detail=f"Caller audio split missing or empty: {caller_audio_path}"
+            )
+
+        # Only re-convert if the split file is not already WAV
+        if caller_audio_path.suffix.lower() != ".wav":
+            caller_audio_wav = convert_to_wav(caller_audio_path)
+        else:
+            caller_audio_wav = caller_audio_path
+
+        if not caller_audio_wav.exists() or caller_audio_wav.stat().st_size == 0:
+            raise HTTPException(
+                500, detail=f"Caller WAV empty after conversion: {caller_audio_wav}"
+            )
+
+        speaker_info["caller_audio_path"] = str(caller_audio_wav)
+
+        # ── Step 4: Feature extraction ────────────────────────────────────────
+        features = feature_extractor.extract_features(str(caller_audio_wav))
+
         if features is None:
-            raise HTTPException(500, detail="Feature extraction failed")
+            raise HTTPException(
+                500, detail="Feature extraction returned None — caller audio may be too short or silent"
+            )
 
+        # ── Step 5: Emotion prediction ────────────────────────────────────────
         prediction = emotion_classifier.predict_single(features)
-        if not prediction or "error" in prediction:
-            raise HTTPException(500, detail=f"Emotion prediction failed: {prediction.get('error', 'Unknown')}")
 
+        if not prediction or "error" in prediction:
+            raise HTTPException(
+                500, detail=f"Emotion prediction failed: {prediction.get('error', 'Unknown')}"
+            )
+
+        # ── Step 6: Emotional state classification ────────────────────────────
         emotional_state = state_classifier.classify_emotional_state(prediction)
 
-        recommendations = {"available": False, "message": "Recommendation engine not initialized"}
+        # ── Step 7: Recommendations ───────────────────────────────────────────
+        recommendations = {"available": False,
+                           "message": "Recommendation engine not initialized"}
         if recommendation_engine:
             try:
-                csr_state = recommendation_engine.classify_emotional_state(prediction)
-                recommendations = recommendation_engine.generate_recommendation(csr_state)
-                recommendations["report"] = recommendation_engine.generate_report(csr_state, recommendations)
+                csr_state = recommendation_engine.classify_emotional_state(
+                    prediction)
+                recommendations = recommendation_engine.generate_recommendation(
+                    csr_state)
+                recommendations["report"] = recommendation_engine.generate_report(
+                    csr_state, recommendations)
                 recommendations["saved_files"] = recommendation_engine.save_recommendation(
-                    csr_state, recommendations, output_dir=str(OUTPUT_DIR / "recommendations")
+                    csr_state, recommendations, output_dir=str(
+                        OUTPUT_DIR / "recommendations")
                 )
             except Exception as e:
                 recommendations = {"available": False, "error": str(e)}
 
+        # ── Step 8: Build result ──────────────────────────────────────────────
         result = {
             "success": True,
             "timestamp": datetime.now().isoformat(),
@@ -324,24 +398,26 @@ async def analyze_audio(
         with open(OUTPUT_DIR / f"analysis_{timestamp}.json", "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2)
 
-        # Persist to DB if agent_id provided
+        # ── Step 9: Persist to DB ─────────────────────────────────────────────
         if db_available and agent_id:
             try:
                 db: Session = SessionLocal()
                 try:
-                    agent = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
+                    agent = db.query(models.Agent).filter(
+                        models.Agent.id == agent_id).first()
                     if agent:
                         emotion_data = result["emotion_analysis"]
-                        trans_data   = result["transcription"]
-                        spk_data     = result["speaker_detection"]
-                        rec_data     = result.get("csr_recommendations", {})
+                        trans_data = result["transcription"]
+                        spk_data = result["speaker_detection"]
+                        rec_data = result.get("csr_recommendations", {})
 
                         risk_map = {
                             "angry": "Critical", "frustrated": "High",
                             "sad": "Medium", "neutral": "Low",
                             "happy": "Low", "satisfied": "Low",
                         }
-                        risk_level = risk_map.get(emotion_data["predicted_emotion"], "Low")
+                        risk_level = risk_map.get(
+                            emotion_data["predicted_emotion"], "Low")
 
                         call_record = models.Call(
                             uuid=str(uuid_lib.uuid4()),
@@ -350,7 +426,8 @@ async def analyze_audio(
                             filename=file.filename,
                             file_path=str(temp_file),
                             file_size=temp_file.stat().st_size if temp_file.exists() else None,
-                            duration_sec=int(trans_data.get("duration", 0)) or None,
+                            duration_sec=int(trans_data.get(
+                                "duration", 0)) or None,
                             upload_status="analyzed",
                             call_date=date.today(),
                         )
@@ -361,24 +438,29 @@ async def analyze_audio(
                             call_id=call_record.id,
                             predicted_emotion=emotion_data["predicted_emotion"],
                             confidence=emotion_data["confidence"],
-                            all_probabilities=emotion_data.get("all_probabilities"),
-                            valence=emotion_data.get("emotional_state", {}).get("valence"),
-                            arousal=emotion_data.get("emotional_state", {}).get("arousal"),
+                            all_probabilities=json.dumps(emotion_data.get(
+                                "all_probabilities") or {}),  # ← fixed
+                            valence=emotion_data.get(
+                                "emotional_state", {}).get("valence"),
+                            arousal=emotion_data.get(
+                                "emotional_state", {}).get("arousal"),
                             risk_level=risk_level,
                             transcription_text=trans_data.get("text"),
-                            transcription_lang=trans_data.get("language", "en"),
+                            transcription_lang=trans_data.get(
+                                "language", "en"),
                             transcription_duration=trans_data.get("duration"),
                             speaker_mode=spk_data.get("mode"),
                             agent_channel=spk_data.get("agent_channel"),
                             caller_channel=spk_data.get("caller_channel"),
                         )
+
                         db.add(ar)
                         db.flush()
 
                         if rec_data.get("available") is not False:
                             action_req = rec_data.get("action_required", {})
-                            comm       = rec_data.get("communication_guidance", {})
-                            dd         = rec_data.get("dos_and_donts", {})
+                            comm = rec_data.get("communication_guidance", {})
+                            dd = rec_data.get("dos_and_donts", {})
                             db.add(models.CSRRecommendation(
                                 analysis_result_id=ar.id,
                                 action=action_req.get("action", "NONE"),
@@ -387,9 +469,10 @@ async def analyze_audio(
                                 instruction=action_req.get("instruction"),
                                 action_color=action_req.get("color"),
                                 recommended_tone=comm.get("recommended_tone"),
-                                example_phrases=comm.get("example_phrases"),
-                                do_list=dd.get("do"),
-                                dont_list=dd.get("dont"),
+                                example_phrases=json.dumps(
+                                    comm.get("example_phrases") or []),
+                                do_list=json.dumps(dd.get("do") or []),
+                                dont_list=json.dumps(dd.get("dont") or []),
                             ))
 
                         agent.risk_level = (
@@ -404,10 +487,12 @@ async def analyze_audio(
             except Exception as db_err:
                 print(f"⚠️  DB persist error: {db_err}")
 
+        # ── Step 10: Cleanup temp files ───────────────────────────────────────
         if background_tasks:
             background_tasks.add_task(cleanup_file, temp_file)
             if speaker_info["mode"] == "stereo" and speaker_info["caller_audio_path"] != str(temp_file):
-                background_tasks.add_task(cleanup_file, Path(speaker_info["caller_audio_path"]))
+                background_tasks.add_task(cleanup_file, Path(
+                    speaker_info["caller_audio_path"]))
 
         return JSONResponse(content=result)
 
@@ -431,10 +516,28 @@ async def transcribe_only(file: UploadFile = File(...), background_tasks: Backgr
 
     try:
         save_upload_file(file, temp_file)
-        result = transcriber.transcribe_call(str(temp_file))
+        process_path = convert_to_wav(temp_file)
+        transcription_result = transcriber.transcribe_call(str(process_path))
+
+        if not transcription_result or "error" in transcription_result:
+            raise HTTPException(
+                500, detail=f"Transcription failed: {transcription_result.get('error', 'Unknown')}"
+            )
+
+        speaker_info = transcriber.detect_speakers(str(process_path))
+
         if background_tasks:
             background_tasks.add_task(cleanup_file, temp_file)
-        return JSONResponse(content={"success": True, "filename": file.filename, "transcription": result})
+
+        return JSONResponse(content={
+            "success": True,
+            "filename": file.filename,
+            "transcription": transcription_result,
+            "speaker_detection": speaker_info,
+        })
+    except HTTPException:
+        cleanup_file(temp_file)
+        raise
     except Exception as e:
         cleanup_file(temp_file)
         raise HTTPException(500, detail=f"Transcription failed: {str(e)}")
@@ -460,39 +563,42 @@ async def models_status_endpoint():
 
 class ClusterCreate(BaseModel):
     name: str
-    region: str
-    overall_risk: Optional[str] = "Safe"
+
 
 class ClusterUpdate(BaseModel):
     name: Optional[str] = None
-    region: Optional[str] = None
-    overall_risk: Optional[str] = None
+
 
 class AgentCreate(BaseModel):
     cluster_id: int
     name: str
-    email: str
-    role: Optional[str] = "CSR"
     risk_level: Optional[str] = "Safe"
+
 
 class AgentUpdate(BaseModel):
     cluster_id: Optional[int] = None
     name: Optional[str] = None
-    email: Optional[str] = None
-    role: Optional[str] = None
     risk_level: Optional[str] = None
     is_active: Optional[bool] = None
+
 
 class CallUpdate(BaseModel):
     agent_id: Optional[int] = None
     call_date: Optional[date] = None
     upload_status: Optional[str] = None
 
+
 class UserCreate(BaseModel):
     name: str
     email: str
     password: str
     role: Optional[str] = "agent"
+
+
+class RoleOption(BaseModel):
+    value: str
+    label: str
+
 
 class UserUpdate(BaseModel):
     name: Optional[str] = None
@@ -502,18 +608,119 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class RegisterPayload(BaseModel):
+    agent_id: int
+    password: str
+    role: str
+
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
+
+
+# ============================================================================
+# AUTH
+# ============================================================================
+
+@app.get("/roles")
+def list_roles():
+    return [
+        {"value": "admin", "label": "Admin"},
+        {"value": "supervisor", "label": "Supervisor"},
+        {"value": "agent", "label": "Agent"},
+    ]
+
+
+@app.post("/auth/register", status_code=201)
+def register(payload: RegisterPayload, db: Session = Depends(get_db)):
+    agent = db.query(models.Agent).filter(
+        models.Agent.id == payload.agent_id).first()
+    if not agent:
+        raise HTTPException(404, detail="Agent not found")
+
+    existing = db.query(models.User).filter(
+        models.User.agent_id == payload.agent_id).first()
+    if existing:
+        raise HTTPException(
+            400, detail="An account already exists for this agent")
+
+    if len(payload.password) < 8:
+        raise HTTPException(
+            400, detail="Password must be at least 8 characters")
+
+    allowed_roles = {"admin", "supervisor", "agent"}
+    if payload.role not in allowed_roles:
+        raise HTTPException(400, detail="Invalid role selected")
+
+    user = models.User(
+        agent_id=payload.agent_id,
+        username=str(payload.agent_id).zfill(4),
+        password_hash=_hash_password(payload.password),
+        role=payload.role,
+        is_active=True,
+    )
+
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "id": user.id,
+        "agent_id": user.agent_id,
+        "username": user.username,
+        "role": user.role,
+        "agent_name": agent.name,
+        "agent_email": agent.email,
+        "is_active": user.is_active,
+        "created_at": user.created_at.isoformat() if user.created_at else None,
+    }
+
+
+@app.post("/auth/login")
+def login(payload: LoginPayload, db: Session = Depends(get_db)):
+    if not db_available:
+        raise HTTPException(503, detail="Database not available")
+
+    user = db.query(models.User).filter(
+        models.User.username == payload.username).first()
+
+    if not user:
+        agent = db.query(models.Agent).filter(
+            models.Agent.email == payload.username).first()
+        if agent:
+            user = db.query(models.User).filter(
+                models.User.agent_id == agent.id).first()
+
+    if not user or not _verify_password(payload.password, user.password_hash):
+        raise HTTPException(401, detail="Invalid username or password")
+
+    if not user.is_active:
+        raise HTTPException(403, detail="Account is disabled")
+
+    user.last_login_at = datetime.utcnow()
+    db.commit()
+
+    agent = db.query(models.Agent).filter(
+        models.Agent.id == user.agent_id).first()
+
+    return {
+        "id": user.id,
+        "agent_id": user.agent_id,
+        "username": user.username,
+        "agent_name": agent.name if agent else None,
+        "agent_email": agent.email if agent else None,
+        "role": user.role,                          # ← this is what frontend needs
+        "cluster_id": agent.cluster_id if agent else None,
+        "cluster_name": agent.cluster.name if (agent and agent.cluster) else None,
+        "is_active": user.is_active,
+        "last_login_at": user.last_login_at.isoformat() if user.last_login_at else None,
+    }
+
+
 # ============================================================================
 # USERS
 # ============================================================================
-
-def _hash_password(plain: str) -> str:
-    from passlib.context import CryptContext
-    return CryptContext(schemes=["bcrypt"], deprecated="auto").hash(plain)
-
-def _verify_password(plain: str, hashed: str) -> bool:
-    from passlib.context import CryptContext
-    return CryptContext(schemes=["bcrypt"], deprecated="auto").verify(plain, hashed)
-
 
 @app.get("/users")
 def list_users(db: Session = Depends(get_db)):
@@ -521,10 +728,8 @@ def list_users(db: Session = Depends(get_db)):
     return [
         {
             "id": u.id,
-            "uuid": str(u.uuid),
-            "name": u.name,
-            "email": u.email,
-            "role": u.role,
+            "agent_id": u.agent_id,
+            "username": u.username,
             "is_active": u.is_active,
             "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
             "created_at": u.created_at.isoformat() if u.created_at else None,
@@ -538,38 +743,16 @@ def get_user(user_id: int, db: Session = Depends(get_db)):
     u = db.query(models.User).filter(models.User.id == user_id).first()
     if not u:
         raise HTTPException(404, detail="User not found")
+    agent = db.query(models.Agent).filter(
+        models.Agent.id == u.agent_id).first()
     return {
         "id": u.id,
-        "uuid": str(u.uuid),
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
+        "agent_id": u.agent_id,
+        "username": u.username,
         "is_active": u.is_active,
+        "agent_name": agent.name if agent else None,
+        "agent_email": agent.email if agent else None,
         "last_login_at": u.last_login_at.isoformat() if u.last_login_at else None,
-        "created_at": u.created_at.isoformat() if u.created_at else None,
-    }
-
-
-@app.post("/users", status_code=201)
-def create_user(payload: UserCreate, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == payload.email).first():
-        raise HTTPException(400, detail="Email already in use")
-    if payload.role not in ("agent", "supervisor"):
-        raise HTTPException(400, detail="role must be 'agent' or 'supervisor'")
-    u = models.User(
-        name=payload.name,
-        email=payload.email,
-        password_hash=_hash_password(payload.password),
-        role=payload.role,
-    )
-    db.add(u); db.commit(); db.refresh(u)
-    return {
-        "id": u.id,
-        "uuid": str(u.uuid),
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
-        "is_active": u.is_active,
         "created_at": u.created_at.isoformat() if u.created_at else None,
     }
 
@@ -582,19 +765,15 @@ def update_user(user_id: int, payload: UserUpdate, db: Session = Depends(get_db)
     data = payload.model_dump(exclude_none=True)
     if "password" in data:
         u.password_hash = _hash_password(data.pop("password"))
-    if "role" in data and data["role"] not in ("agent", "supervisor"):
-        raise HTTPException(400, detail="role must be 'agent' or 'supervisor'")
     for k, v in data.items():
         setattr(u, k, v)
-    db.commit(); db.refresh(u)
+    db.commit()
+    db.refresh(u)
     return {
         "id": u.id,
-        "uuid": str(u.uuid),
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
+        "agent_id": u.agent_id,
+        "username": u.username,
         "is_active": u.is_active,
-        "updated_at": u.updated_at.isoformat() if u.updated_at else None,
     }
 
 
@@ -603,25 +782,8 @@ def delete_user(user_id: int, db: Session = Depends(get_db)):
     u = db.query(models.User).filter(models.User.id == user_id).first()
     if not u:
         raise HTTPException(404, detail="User not found")
-    db.delete(u); db.commit()
-
-
-@app.post("/auth/login")
-def login(email: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
-    u = db.query(models.User).filter(models.User.email == email).first()
-    if not u or not _verify_password(password, u.password_hash):
-        raise HTTPException(401, detail="Invalid email or password")
-    if not u.is_active:
-        raise HTTPException(403, detail="Account is disabled")
-    u.last_login_at = datetime.utcnow()
+    db.delete(u)
     db.commit()
-    return {
-        "id": u.id,
-        "uuid": str(u.uuid),
-        "name": u.name,
-        "email": u.email,
-        "role": u.role,
-    }
 
 
 # ============================================================================
@@ -635,7 +797,8 @@ def list_clusters(db: Session = Depends(get_db)):
     result = []
     today = date.today()
     for c in clusters:
-        agents = db.query(models.Agent).filter(models.Agent.cluster_id == c.id).all()
+        agents = db.query(models.Agent).filter(
+            models.Agent.cluster_id == c.id).all()
         calls_today = db.query(func.count(models.Call.id)).filter(
             models.Call.cluster_id == c.id, models.Call.call_date == today
         ).scalar() or 0
@@ -660,7 +823,8 @@ def list_clusters(db: Session = Depends(get_db)):
 
 @app.get("/clusters/{cluster_id}")
 def get_cluster(cluster_id: int, db: Session = Depends(get_db)):
-    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    c = db.query(models.Cluster).filter(
+        models.Cluster.id == cluster_id).first()
     if not c:
         raise HTTPException(404, detail="Cluster not found")
     return c
@@ -671,27 +835,33 @@ def create_cluster(payload: ClusterCreate, db: Session = Depends(get_db)):
     if db.query(models.Cluster).filter(models.Cluster.name == payload.name).first():
         raise HTTPException(400, detail="Cluster name already exists")
     c = models.Cluster(**payload.model_dump())
-    db.add(c); db.commit(); db.refresh(c)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
     return c
 
 
 @app.put("/clusters/{cluster_id}")
 def update_cluster(cluster_id: int, payload: ClusterUpdate, db: Session = Depends(get_db)):
-    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    c = db.query(models.Cluster).filter(
+        models.Cluster.id == cluster_id).first()
     if not c:
         raise HTTPException(404, detail="Cluster not found")
     for k, v in payload.model_dump(exclude_none=True).items():
         setattr(c, k, v)
-    db.commit(); db.refresh(c)
+    db.commit()
+    db.refresh(c)
     return c
 
 
 @app.delete("/clusters/{cluster_id}", status_code=204)
 def delete_cluster(cluster_id: int, db: Session = Depends(get_db)):
-    c = db.query(models.Cluster).filter(models.Cluster.id == cluster_id).first()
+    c = db.query(models.Cluster).filter(
+        models.Cluster.id == cluster_id).first()
     if not c:
         raise HTTPException(404, detail="Cluster not found")
-    db.delete(c); db.commit()
+    db.delete(c)
+    db.commit()
 
 
 # ============================================================================
@@ -739,12 +909,13 @@ def get_agent(agent_id: int, db: Session = Depends(get_db)):
 
 @app.post("/agents", status_code=201)
 def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
-    if db.query(models.Agent).filter(models.Agent.email == payload.email).first():
-        raise HTTPException(400, detail="Email already in use")
     if not db.query(models.Cluster).filter(models.Cluster.id == payload.cluster_id).first():
         raise HTTPException(404, detail="Cluster not found")
+
     a = models.Agent(**payload.model_dump())
-    db.add(a); db.commit(); db.refresh(a)
+    db.add(a)
+    db.commit()
+    db.refresh(a)
     return a
 
 
@@ -755,7 +926,8 @@ def update_agent(agent_id: int, payload: AgentUpdate, db: Session = Depends(get_
         raise HTTPException(404, detail="Agent not found")
     for k, v in payload.model_dump(exclude_none=True).items():
         setattr(a, k, v)
-    db.commit(); db.refresh(a)
+    db.commit()
+    db.refresh(a)
     return a
 
 
@@ -764,7 +936,8 @@ def delete_agent(agent_id: int, db: Session = Depends(get_db)):
     a = db.query(models.Agent).filter(models.Agent.id == agent_id).first()
     if not a:
         raise HTTPException(404, detail="Agent not found")
-    db.delete(a); db.commit()
+    db.delete(a)
+    db.commit()
 
 
 # ============================================================================
@@ -781,7 +954,8 @@ def list_calls(
     q = db.query(models.Call).options(
         joinedload(models.Call.agent),
         joinedload(models.Call.cluster),
-        joinedload(models.Call.analysis_result).joinedload(models.AnalysisResult.recommendation),
+        joinedload(models.Call.analysis_result).joinedload(
+            models.AnalysisResult.recommendation),
     )
     if cluster_id:
         q = q.filter(models.Call.cluster_id == cluster_id)
@@ -790,7 +964,7 @@ def list_calls(
 
     result = []
     for c in q.order_by(models.Call.created_at.desc()).all():
-        ar  = c.analysis_result
+        ar = c.analysis_result
         rec = ar.recommendation if ar else None
         result.append({
             "id": c.id,
@@ -833,7 +1007,8 @@ def update_call(call_id: int, payload: CallUpdate, db: Session = Depends(get_db)
         raise HTTPException(404, detail="Call not found")
     for k, v in payload.model_dump(exclude_none=True).items():
         setattr(c, k, v)
-    db.commit(); db.refresh(c)
+    db.commit()
+    db.refresh(c)
     return c
 
 
@@ -842,7 +1017,8 @@ def delete_call(call_id: int, db: Session = Depends(get_db)):
     c = db.query(models.Call).filter(models.Call.id == call_id).first()
     if not c:
         raise HTTPException(404, detail="Call not found")
-    db.delete(c); db.commit()
+    db.delete(c)
+    db.commit()
 
 
 # ============================================================================
@@ -853,25 +1029,31 @@ def delete_call(call_id: int, db: Session = Depends(get_db)):
 def reports_summary(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
     from sqlalchemy import func
     q_calls = db.query(func.count(models.Call.id))
-    q_ar    = db.query(func.count(models.AnalysisResult.id))
-    q_esc   = db.query(func.count(models.Escalation.id))
+    q_ar = db.query(func.count(models.AnalysisResult.id))
+    q_esc = db.query(func.count(models.Escalation.id))
     if cluster_id:
         q_calls = q_calls.filter(models.Call.cluster_id == cluster_id)
-        q_ar    = q_ar.join(models.Call).filter(models.Call.cluster_id == cluster_id)
-        q_esc   = q_esc.join(models.Call, models.Escalation.call_id == models.Call.id).filter(models.Call.cluster_id == cluster_id)
+        q_ar = q_ar.join(models.Call).filter(
+            models.Call.cluster_id == cluster_id)
+        q_esc = q_esc.join(models.Call, models.Escalation.call_id == models.Call.id).filter(
+            models.Call.cluster_id == cluster_id)
     return {
         "total_calls": q_calls.scalar() or 0,
         "analyzed_calls": q_ar.scalar() or 0,
         "escalations": q_esc.scalar() or 0,
         "total_agents": db.query(func.count(models.Agent.id)).scalar() or 0,
-        "risky_agents": db.query(func.count(models.Agent.id)).filter(models.Agent.risk_level == "Risky").scalar() or 0,
+        "risky_agents": db.query(func.count(models.Agent.id)).filter(
+            models.Agent.risk_level == "Risky").scalar() or 0,
     }
 
 
 @app.get("/reports/emotion-distribution")
 def reports_emotion_distribution(cluster_id: Optional[int] = None, db: Session = Depends(get_db)):
     from sqlalchemy import func
-    q = db.query(models.AnalysisResult.predicted_emotion, func.count(models.AnalysisResult.id).label("count"))
+    q = db.query(
+        models.AnalysisResult.predicted_emotion,
+        func.count(models.AnalysisResult.id).label("count")
+    )
     if cluster_id:
         q = q.join(models.Call).filter(models.Call.cluster_id == cluster_id)
     rows = q.group_by(models.AnalysisResult.predicted_emotion).all()
@@ -884,18 +1066,22 @@ def reports_emotion_trend(cluster_id: Optional[int] = None, db: Session = Depend
     from datetime import timedelta
     cutoff = date.today() - timedelta(days=365)
     q = db.query(
-        extract("year",  models.Call.call_date).label("year"),
+        extract("year", models.Call.call_date).label("year"),
         extract("month", models.Call.call_date).label("month"),
         models.AnalysisResult.predicted_emotion,
         func.count(models.AnalysisResult.id).label("count"),
-    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(models.Call.call_date >= cutoff)
+    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(
+        models.Call.call_date >= cutoff
+    )
     if cluster_id:
         q = q.filter(models.Call.cluster_id == cluster_id)
-    rows = q.group_by("year", "month", models.AnalysisResult.predicted_emotion).all()
+    rows = q.group_by(
+        "year", "month", models.AnalysisResult.predicted_emotion).all()
     pivot: dict = {}
     for r in rows:
         label = f"{int(r.year)}-{int(r.month):02d}"
-        pivot.setdefault(label, {"month": label})[r.predicted_emotion] = r.count
+        pivot.setdefault(label, {"month": label})[
+            r.predicted_emotion] = r.count
     return sorted(pivot.values(), key=lambda x: x["month"])
 
 
@@ -905,11 +1091,13 @@ def reports_risk_trend(cluster_id: Optional[int] = None, db: Session = Depends(g
     from datetime import timedelta
     cutoff = date.today() - timedelta(days=365)
     q = db.query(
-        extract("year",  models.Call.call_date).label("year"),
+        extract("year", models.Call.call_date).label("year"),
         extract("month", models.Call.call_date).label("month"),
         models.AnalysisResult.risk_level,
         func.count(models.AnalysisResult.id).label("count"),
-    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(models.Call.call_date >= cutoff)
+    ).join(models.AnalysisResult, models.AnalysisResult.call_id == models.Call.id).filter(
+        models.Call.call_date >= cutoff
+    )
     if cluster_id:
         q = q.filter(models.Call.cluster_id == cluster_id)
     rows = q.group_by("year", "month", models.AnalysisResult.risk_level).all()
@@ -926,7 +1114,7 @@ def reports_call_volume(db: Session = Depends(get_db)):
     from datetime import timedelta
     cutoff = date.today() - timedelta(days=365)
     rows = db.query(
-        extract("year",  models.Call.call_date).label("year"),
+        extract("year", models.Call.call_date).label("year"),
         extract("month", models.Call.call_date).label("month"),
         models.Cluster.name.label("cluster"),
         func.count(models.Call.id).label("count"),
@@ -949,7 +1137,8 @@ def reports_agent_risk_scores(cluster_id: Optional[int] = None, db: Session = De
     result = []
     for a in q.all():
         counts = db.query(
-            models.AnalysisResult.risk_level, func.count(models.AnalysisResult.id).label("cnt")
+            models.AnalysisResult.risk_level,
+            func.count(models.AnalysisResult.id).label("cnt")
         ).join(models.Call, models.AnalysisResult.call_id == models.Call.id).filter(
             models.Call.agent_id == a.id
         ).group_by(models.AnalysisResult.risk_level).all()
@@ -966,8 +1155,8 @@ def reports_agent_risk_scores(cluster_id: Optional[int] = None, db: Session = De
             "low": rm.get("Low", 0),
             "total_calls": total,
             "risk_score": round(
-                (rm.get("Critical", 0)*4 + rm.get("High", 0)*3 + rm.get("Medium", 0)*2 + rm.get("Low", 0))
-                / total * 25, 1
+                (rm.get("Critical", 0) * 4 + rm.get("High", 0) * 3 +
+                 rm.get("Medium", 0) * 2 + rm.get("Low", 0)) / total * 25, 1
             ),
         })
     return sorted(result, key=lambda x: -x["risk_score"])
@@ -978,4 +1167,5 @@ def reports_agent_risk_scores(cluster_id: Optional[int] = None, db: Session = De
 # ============================================================================
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True, log_level="info")
+    uvicorn.run("main:app", host="0.0.0.0", port=8000,
+                reload=True, log_level="info")

@@ -88,6 +88,19 @@ class MFCCFeatureExtractor:
         # Load audio with librosa
         audio, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
 
+        # 🔥 REMOVE SILENCE
+        audio, _ = librosa.effects.trim(audio, top_db=25)
+
+        # 🔥 NORMALIZE
+        audio = librosa.util.normalize(audio)
+
+        # 🔥 FIX LENGTH
+        TARGET_DURATION = 5  # seconds
+
+        if len(audio) > sr * TARGET_DURATION:
+            audio = audio[:sr * TARGET_DURATION]
+        else:
+            audio = np.pad(audio, (0, max(0, sr * TARGET_DURATION - len(audio))))
         duration = librosa.get_duration(y=audio, sr=sr)
 
         print(f"✓ Audio loaded successfully")
@@ -350,6 +363,16 @@ class MFCCFeatureExtractor:
         try:
             # Load audio
             audio, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
+
+            audio, _ = librosa.effects.trim(audio, top_db=25)
+            audio = librosa.util.normalize(audio)
+
+            TARGET_DURATION = 5
+
+            if len(audio) > sr * TARGET_DURATION:
+                audio = audio[:sr * TARGET_DURATION]
+            else:
+                audio = np.pad(audio, (0, max(0, sr * TARGET_DURATION - len(audio))))
 
             # Extract MFCC features
             mfcc_features = self.extract_mfcc(audio, sr)

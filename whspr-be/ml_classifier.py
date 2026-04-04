@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
-
+from sklearn.pipeline import Pipeline
 # Machine Learning
 from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
 from sklearn.preprocessing import StandardScaler, LabelEncoder
@@ -157,13 +157,17 @@ class EmotionClassifier:
             Classifier instance
         """
         if self.classifier_type == 'svm':
-            return SVC(
-                kernel=kwargs.get('kernel', 'rbf'),
-                C=kwargs.get('C', 1.0),
-                gamma=kwargs.get('gamma', 'scale'),
-                probability=True,
-                random_state=self.random_state
-            )
+           return Pipeline([
+                ("scaler", StandardScaler()),
+                ("svm", SVC(
+                    kernel=kwargs.get('kernel', 'rbf'),
+                    C=kwargs.get('C', 10),  # 🔥 better default
+                    gamma=kwargs.get('gamma', 'scale'),
+                    probability=True,
+                    class_weight="balanced",  # 🔥 VERY IMPORTANT
+                    random_state=self.random_state
+                ))
+            ])
 
         elif self.classifier_type == 'rf':
             return RandomForestClassifier(
@@ -222,23 +226,18 @@ class EmotionClassifier:
         print(f"[Split] Training samples: {len(X_train)}")
         print(f"[Split] Test samples: {len(X_test)}\n")
 
-        # Scale features
-        print("[Preprocessing] Scaling features...")
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
-        print("✓ Features scaled\n")
-
+       
         # Create and train classifier
         print(
             f"[Training] Training {self.CLASSIFIERS[self.classifier_type]}...")
         self.model = self._create_classifier(**classifier_params)
-        self.model.fit(X_train_scaled, y_train)
+        self.model.fit(X_train, y_train)
         print("✓ Training complete\n")
 
         # Evaluate on test set
         print("[Evaluation] Testing model...")
-        y_pred = self.model.predict(X_test_scaled)
-        y_pred_proba = self.model.predict_proba(X_test_scaled)
+        y_pred = self.model.predict(X_test)
+        y_pred_proba = self.model.predict_proba(X_test)
 
         # Calculate metrics
         accuracy = accuracy_score(y_test, y_pred)
@@ -251,8 +250,7 @@ class EmotionClassifier:
 
         # Cross-validation
         print("[Cross-Validation] Running 5-fold CV...")
-        cv_scores = cross_val_score(
-            self.model, X_train_scaled, y_train, cv=5, scoring='accuracy'
+        cv_scores = cross_val_score(self.model, X_train, y_train, cv=5, scoring='accuracy'
         )
 
         # Update training history
@@ -336,10 +334,10 @@ class EmotionClassifier:
             X = X.reshape(1, -1)
 
         # Scale features
-        X_scaled = self.scaler.transform(X)
+       
 
         # Predict
-        y_pred_encoded = self.model.predict(X_scaled)
+        y_pred_encoded = self.model.predict(X)
         y_pred_labels = self.label_encoder.inverse_transform(y_pred_encoded)
 
         results = {
@@ -348,7 +346,7 @@ class EmotionClassifier:
         }
 
         if return_probabilities:
-            y_pred_proba = self.model.predict_proba(X_scaled)
+            y_pred_proba = self.model.predict_proba(X)
 
             # Get probabilities for each emotion
             probabilities = []

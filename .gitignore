@@ -1,6 +1,10 @@
 ravdess_download/
 *.zip
 training_data/
+cremad/
+tess/
+train_data/
+Ravdess/
 outputs/
 __pycache__/
 *.pyc
