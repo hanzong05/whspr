@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "whspr — CSR Call Analysis",
+  title: "Affecta — CSR Call Analysis",
   description: "AI-powered emotional analysis for CSR call recordings",
 };
 

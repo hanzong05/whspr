@@ -149,7 +149,7 @@ export default function LoginPage() {
               className="text-white text-lg font-bold tracking-tight"
               style={{ fontFamily: "'DM Serif Display', Georgia, serif" }}
             >
-              whspr
+              Affecta
             </span>
           </div>
 
@@ -231,7 +231,7 @@ export default function LoginPage() {
               className="text-gray-900 text-lg font-bold"
               style={{ fontFamily: "'DM Serif Display', Georgia, serif" }}
             >
-              whspr
+              Affecta
             </span>
           </div>
 
@@ -271,7 +271,7 @@ export default function LoginPage() {
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@whspr.com"
+                  placeholder="you@affecta.com"
                   autoComplete="email"
                   className="w-full pl-10 pr-4 py-3 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-transparent placeholder-gray-300 text-gray-800 transition-shadow"
                 />

@@ -61,6 +61,7 @@ export default function ClustersPage() {
 
   const [formName, setFormName] = useState("");
   const [formError, setFormError] = useState("");
+  const [deleteError, setDeleteError] = useState("");
 
   const fetchClusters = async () => {
     setLoading(true);
@@ -150,9 +151,25 @@ export default function ClustersPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    await fetch(`${API}/clusters/${deleteTarget.id}`, { method: "DELETE" });
-    setDeleteTarget(null);
-    fetchClusters();
+    setDeleteError("");
+    try {
+      const res = await fetch(`${API}/clusters/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        setDeleteError(
+          err?.detail?.includes("related agents or calls")
+            ? "This cluster has agents or calls assigned to it. Reassign or remove them first."
+            : err?.detail || "Failed to delete cluster. Please try again.",
+        );
+        return;
+      }
+      setDeleteTarget(null);
+      fetchClusters();
+    } catch {
+      setDeleteError("Network error. Check your connection and try again.");
+    }
   };
 
   const filtered = clusters.filter((c) => {
@@ -175,7 +192,6 @@ export default function ClustersPage() {
           className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-transparent"
         />
       </div>
-
       {formError && <p className="text-xs text-red-500">{formError}</p>}
     </Modal.Body>
   );
@@ -326,10 +342,19 @@ export default function ClustersPage() {
 
       {/* ── DELETE MODAL ── */}
       {deleteTarget && (
-        <Modal onClose={() => setDeleteTarget(null)} maxWidth="sm">
+        <Modal
+          onClose={() => {
+            setDeleteTarget(null);
+            setDeleteError("");
+          }}
+          maxWidth="sm"
+        >
           <Modal.Header
             title="Delete Cluster"
-            onClose={() => setDeleteTarget(null)}
+            onClose={() => {
+              setDeleteTarget(null);
+              setDeleteError("");
+            }}
           />
           <Modal.Body>
             <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto">
@@ -347,6 +372,24 @@ export default function ClustersPage() {
                 />
               </svg>
             </div>
+            {deleteError && (
+              <div className="flex items-start gap-2.5 px-3.5 py-3 bg-red-50 border border-red-200 rounded-xl">
+                <svg
+                  className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                  />
+                </svg>
+                <p className="text-xs text-red-700">{deleteError}</p>
+              </div>
+            )}
             <p className="text-sm text-gray-500 text-center">
               Are you sure you want to delete{" "}
               <span className="font-medium text-gray-700">
@@ -357,7 +400,10 @@ export default function ClustersPage() {
           </Modal.Body>
           <Modal.Footer>
             <button
-              onClick={() => setDeleteTarget(null)}
+              onClick={() => {
+                setDeleteTarget(null);
+                setDeleteError("");
+              }}
               className="flex-1 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
             >
               Cancel
@@ -544,7 +590,10 @@ export default function ClustersPage() {
                     <ActionButtons
                       onView={() => setViewTarget(cluster)}
                       onEdit={() => openEdit(cluster)}
-                      onDelete={() => setDeleteTarget(cluster)}
+                      onDelete={() => {
+                        setDeleteError("");
+                        setDeleteTarget(cluster);
+                      }}
                     />
                   </td>
                 </tr>

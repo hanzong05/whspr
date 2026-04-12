@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 const navItems = [
   {
     label: "Dashboard",
-    href: "/",
+    href: "/dashboard",
     icon: (
       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
         <path d="M10.707 2.293a1 1 0 00-1.414 0l-7 7a1 1 0 001.414 1.414L4 10.414V17a1 1 0 001 1h2a1 1 0 001-1v-2a1 1 0 011-1h2a1 1 0 011 1v2a1 1 0 001 1h2a1 1 0 001-1v-6.586l.293.293a1 1 0 001.414-1.414l-7-7z" />
@@ -62,11 +62,18 @@ const navItems = [
     href: "/dashboard/register",
     icon: (
       <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-        <path
-          fillRule="evenodd"
-          d="M6 2a2 2 0 00-2 2v12a2 2 0 002 2h8a2 2 0 002-2V7.414A2 2 0 0015.414 6L12 2.586A2 2 0 0010.586 2H6zm2 10a1 1 0 10-2 0v3a1 1 0 102 0v-3zm2-3a1 1 0 011 1v5a1 1 0 11-2 0v-5a1 1 0 011-1zm4-1a1 1 0 10-2 0v6a1 1 0 102 0V8z"
-          clipRule="evenodd"
-        />
+        <path d="M10 2a4 4 0 100 8 4 4 0 000-8zM2 16a6 6 0 1112 0H2z" />
+        <path d="M16 7v2h2v2h-2v2h-2v-2h-2V9h2V7h2z" />
+      </svg>
+    ),
+  },
+  {
+    label: "Manage Users",
+    href: "/dashboard/users",
+    icon: (
+      <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+        <path d="M7 7a3 3 0 100-6 3 3 0 000 6zM3 14a4 4 0 018 0v1H3v-1z" />
+        <path d="M13 7a3 3 0 100-6 3 3 0 000 6zM11 14a4 4 0 018 0v1h-8v-1z" />
       </svg>
     ),
   },
@@ -80,7 +87,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="h-16 flex items-center px-6 border-b border-gray-200">
         <span className="text-2xl font-bold text-red-500 tracking-tight">
-          whspr
+          Affecta
         </span>
         <span className="ml-2 text-xs font-medium text-gray-400 uppercase tracking-widest">
           CSR

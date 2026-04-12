@@ -1,41 +1,67 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Header from "@/components/Header";
-function NavBar() {
-  return (
-    <nav className="sticky top-0 z-50 bg-white border-b border-gray-100 px-10 h-16 flex items-center justify-between">
-      <div className="flex items-center gap-2.5 font-serif text-xl tracking-tight text-gray-900">
-        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-        CallSense
-      </div>
-      <div className="flex items-center gap-8">
-        {["Features", "How it works", "Pricing", "Docs"].map((link) => (
-          <a
-            key={link}
-            href="#"
-            className="text-sm text-gray-500 hover:text-gray-900 transition-colors"
-          >
-            {link}
-          </a>
-        ))}
-        <a
-          href="#"
-          className="text-sm font-medium bg-gray-900 text-white px-4 py-2 rounded-lg hover:bg-red-500 transition-colors"
-        >
-          Get started
-        </a>
-      </div>
-    </nav>
-  );
-}
+import { LineChart, Line, ResponsiveContainer, Tooltip } from "recharts";
+
+const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+const emotionColors: Record<string, string> = {
+  angry: "#ef4444",
+  frustrated: "#f97316",
+  neutral: "#94a3b8",
+  happy: "#22c55e",
+  sad: "#3b82f6",
+  satisfied: "#8b5cf6",
+};
 
 function MiniDashboard() {
-  const risks = [
-    { name: "Maria Santos", score: 88 },
-    { name: "Juan dela Cruz", score: 74 },
-    { name: "Ana Reyes", score: 61 },
-  ];
+  const [risks, setRisks] = useState<{ name: string; score: number }[]>([]);
+  const [emotionTrend, setEmotionTrend] = useState<
+    Record<string, number | string>[]
+  >([]);
+  const [summary, setSummary] = useState<{
+    total_agents?: number;
+    risky_agents?: number;
+    total_calls?: number;
+  } | null>(null);
+  const [emotionKeys, setEmotionKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetch(`${API}/reports/emotion-trend`)
+      .then((r) => r.json())
+      .then((data) => {
+        setEmotionTrend(data);
+        if (data.length > 0)
+          setEmotionKeys(Object.keys(data[0]).filter((k) => k !== "month"));
+      })
+      .catch(() => {});
+
+    fetch(`${API}/reports/summary`)
+      .then((r) => r.json())
+      .then(setSummary)
+      .catch(() => {});
+
+    fetch(`${API}/reports/agent-risk-scores`)
+      .then((r) => r.json())
+      .then((data: { agent_name: string; risk_score: number }[]) =>
+        setRisks(
+          data
+            .slice(0, 3)
+            .map((a) => ({ name: a.agent_name, score: a.risk_score })),
+        ),
+      )
+      .catch(() => {});
+  }, []);
+
+  const displayRisks =
+    risks.length > 0
+      ? risks
+      : [
+          { name: "Maria Santos", score: 88 },
+          { name: "Juan dela Cruz", score: 74 },
+          { name: "Ana Reyes", score: 61 },
+        ];
 
   return (
     <div className="bg-white border border-gray-200 rounded-2xl p-5 space-y-3 shadow-sm">
@@ -43,14 +69,12 @@ function MiniDashboard() {
       <div className="flex items-center justify-between pb-3 border-b border-gray-100">
         <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-          CallSense
+          Affecta
         </div>
         <div className="flex gap-4 text-xs text-gray-400">
           <span className="text-gray-900 font-medium border-b border-red-500 pb-0.5">
             Dashboard
           </span>
-          <span>Reports</span>
-          <span>Agents</span>
         </div>
       </div>
 
@@ -58,48 +82,89 @@ function MiniDashboard() {
       <div className="grid grid-cols-3 gap-2">
         <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
           <p className="text-[10px] text-gray-400 mb-1">Total agents</p>
-          <p className="text-xl font-semibold text-gray-900">148</p>
+          <p className="text-xl font-semibold text-gray-900">
+            {summary?.total_agents ?? 148}
+          </p>
         </div>
         <div className="bg-red-500 rounded-xl p-3">
           <p className="text-[10px] text-red-100 mb-1">High load</p>
-          <p className="text-xl font-semibold text-white">23%</p>
+          <p className="text-xl font-semibold text-white">
+            {summary?.total_agents
+              ? `${Math.round(((summary.risky_agents ?? 0) / summary.total_agents) * 100)}%`
+              : "23%"}
+          </p>
         </div>
         <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
           <p className="text-[10px] text-gray-400 mb-1">Total calls</p>
-          <p className="text-xl font-semibold text-gray-900">4,821</p>
+          <p className="text-xl font-semibold text-gray-900">
+            {summary?.total_calls
+              ? summary.total_calls.toLocaleString()
+              : "4,821"}
+          </p>
         </div>
       </div>
 
-      {/* Sparkline */}
+      {/* Sparkline — Recharts LineChart, same as ReportsPage emotion trend */}
       <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
         <p className="text-[10px] text-gray-400 mb-2">Emotional trend line</p>
-        <svg viewBox="0 0 280 36" fill="none" className="w-full h-10">
-          <polyline
-            points="0,28 40,22 80,26 120,14 160,18 200,10 240,16 280,8"
-            stroke="#ef4444"
-            strokeWidth="1.5"
-            fill="none"
-          />
-          <polyline
-            points="0,30 40,28 80,24 120,26 160,20 200,22 240,18 280,20"
-            stroke="#378ADD"
-            strokeWidth="1.5"
-            fill="none"
-          />
-          <polyline
-            points="0,32 40,30 80,28 120,30 160,28 200,26 240,24 280,26"
-            stroke="#1D9E75"
-            strokeWidth="1.5"
-            fill="none"
-          />
-        </svg>
+        {emotionTrend.length > 0 ? (
+          <ResponsiveContainer width="100%" height={40}>
+            <LineChart
+              data={emotionTrend}
+              margin={{ top: 2, right: 2, left: 2, bottom: 2 }}
+            >
+              <Tooltip
+                contentStyle={{
+                  borderRadius: 8,
+                  border: "none",
+                  boxShadow: "0 4px 12px rgba(0,0,0,.08)",
+                  fontSize: 10,
+                }}
+                labelFormatter={() => ""}
+              />
+              {emotionKeys.map((k) => (
+                <Line
+                  key={k}
+                  type="monotone"
+                  dataKey={k}
+                  stroke={emotionColors[k] ?? "#94a3b8"}
+                  strokeWidth={1.5}
+                  dot={false}
+                  activeDot={{ r: 3 }}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          // Static fallback while loading / no data
+          <svg viewBox="0 0 280 36" fill="none" className="w-full h-10">
+            <polyline
+              points="0,28 40,22 80,26 120,14 160,18 200,10 240,16 280,8"
+              stroke="#ef4444"
+              strokeWidth="1.5"
+              fill="none"
+            />
+            <polyline
+              points="0,30 40,28 80,24 120,26 160,20 200,22 240,18 280,20"
+              stroke="#3b82f6"
+              strokeWidth="1.5"
+              fill="none"
+            />
+            <polyline
+              points="0,32 40,30 80,28 120,30 160,28 200,26 240,24 280,26"
+              stroke="#22c55e"
+              strokeWidth="1.5"
+              fill="none"
+            />
+          </svg>
+        )}
       </div>
 
       {/* Risk list */}
       <div className="bg-white border border-gray-100 rounded-xl p-3 shadow-sm">
         <p className="text-[10px] text-gray-400 mb-2">Top risk agents</p>
         <div className="space-y-2">
-          {risks.map((a, i) => (
+          {displayRisks.map((a, i) => (
             <div key={a.name} className="flex items-center gap-2">
               <span className="w-4 h-4 rounded-full bg-red-50 text-red-600 text-[9px] font-bold flex items-center justify-center flex-shrink-0">
                 {i + 1}
@@ -222,7 +287,7 @@ const features = [
   },
   {
     title: "API-first backend",
-    desc: "Connect CallSense to your existing CRM, ticketing, or telephony platform via a clean REST API.",
+    desc: "Connect Affecta to your existing CRM, ticketing, or telephony platform via a clean REST API.",
     icon: (
       <svg
         className="w-5 h-5 text-red-500"
@@ -244,7 +309,7 @@ const features = [
 const steps = [
   {
     title: "Calls are recorded and ingested",
-    desc: "CallSense connects to your telephony system and processes every call automatically, no manual uploads needed.",
+    desc: "Affecta connects to your telephony system and processes every call automatically, no manual uploads needed.",
   },
   {
     title: "AI analysis runs on every transcript",
@@ -285,11 +350,14 @@ const metrics = [
 
 export default function LandingPage() {
   const [activeStep, setActiveStep] = useState(0);
-
+  const [openLogin, setOpenLogin] = useState<(() => void) | null>(null);
+  const handleExposeLogin = useCallback((fn: () => void) => {
+    setOpenLogin(() => fn);
+  }, []);
   return (
     <div className="bg-white min-h-screen">
-      <Header />
-      {/* HERO */}
+      <Header onExposeOpenLogin={handleExposeLogin} />
+
       <section className="max-w-6xl mx-auto px-10 py-20 grid grid-cols-2 gap-16 items-center">
         <div>
           <div className="inline-flex items-center gap-2 text-xs font-medium tracking-widest uppercase text-red-700 bg-red-50 px-3 py-1.5 rounded-full mb-6">
@@ -305,19 +373,16 @@ export default function LandingPage() {
             performance insights — so your supervisors can act before issues
             escalate.
           </p>
-          <div className="flex items-center gap-4">
-            <button className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-6 py-3 rounded-lg transition-colors">
-              Request a demo
-            </button>
-            <button className="border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900 text-sm px-5 py-3 rounded-lg transition-colors">
-              See the dashboard
-            </button>
-          </div>
+          <button
+            onClick={() => openLogin?.()}
+            className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-6 py-3 rounded-lg transition-colors"
+          >
+            Go to dashboard →
+          </button>
         </div>
         <MiniDashboard />
       </section>
 
-      {/* METRICS BAND */}
       <div className="max-w-6xl mx-auto px-10 mb-20">
         <div className="bg-gray-900 rounded-2xl py-10 px-12 grid grid-cols-4 gap-8">
           {metrics.map((m) => (
@@ -332,143 +397,13 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* FEATURES */}
-      <section className="max-w-6xl mx-auto px-10 pb-20">
-        <p className="text-xs font-medium tracking-widest uppercase text-red-700 mb-2">
-          Core capabilities
-        </p>
-        <h2 className="text-4xl font-serif tracking-tight text-gray-900 mb-3">
-          Everything your QA team needs
-        </h2>
-        <p className="text-base text-gray-500 leading-relaxed max-w-lg mb-10">
-          Built for call centers managing high-volume, high-stakes conversations
-          across distributed agent clusters.
-        </p>
-        <div className="grid grid-cols-3 gap-5">
-          {features.map((f) => (
-            <div
-              key={f.title}
-              className="border border-gray-100 rounded-2xl p-6 bg-white hover:border-red-200 hover:shadow-sm transition-all"
-            >
-              <div className="w-9 h-9 rounded-lg bg-red-50 flex items-center justify-center mb-4">
-                {f.icon}
-              </div>
-              <h3 className="text-base font-semibold text-gray-900 mb-2">
-                {f.title}
-              </h3>
-              <p className="text-sm text-gray-500 leading-relaxed">{f.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* HOW IT WORKS */}
-      <section className="max-w-6xl mx-auto px-10 pb-20">
-        <p className="text-xs font-medium tracking-widest uppercase text-red-700 mb-2">
-          How it works
-        </p>
-        <h2 className="text-4xl font-serif tracking-tight text-gray-900 mb-10">
-          From raw audio to actionable insight
-        </h2>
-        <div className="grid grid-cols-2 gap-16 items-center">
-          <div className="space-y-3">
-            {steps.map((s, i) => (
-              <div
-                key={s.title}
-                onClick={() => setActiveStep(i)}
-                className={`flex gap-4 items-start p-4 rounded-xl cursor-pointer transition-colors ${
-                  activeStep === i ? "bg-red-50" : "hover:bg-gray-50"
-                }`}
-              >
-                <span
-                  className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0 transition-colors ${
-                    activeStep === i
-                      ? "bg-red-500 text-white"
-                      : "bg-gray-100 text-gray-500"
-                  }`}
-                >
-                  {i + 1}
-                </span>
-                <div>
-                  <p className="text-sm font-semibold text-gray-900 mb-1">
-                    {s.title}
-                  </p>
-                  <p className="text-sm text-gray-500 leading-relaxed">
-                    {s.desc}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Pulse visual */}
-          <div className="bg-white border border-gray-100 rounded-2xl flex items-center justify-center min-h-72 shadow-sm">
-            <div className="relative flex items-center justify-center">
-              {[100, 150, 200].map((size, i) => (
-                <span
-                  key={size}
-                  className="absolute rounded-full border border-red-300 animate-ping opacity-20"
-                  style={{
-                    width: size,
-                    height: size,
-                    animationDelay: `${i * 0.6}s`,
-                    animationDuration: "2.5s",
-                  }}
-                />
-              ))}
-              <div className="w-16 h-16 bg-red-500 rounded-full flex items-center justify-center relative z-10">
-                <svg
-                  className="w-7 h-7 text-white"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.8}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"
-                  />
-                </svg>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* CTA */}
-      <section className="max-w-6xl mx-auto px-10 pb-20">
-        <div className="bg-white border border-gray-100 rounded-2xl p-16 text-center shadow-sm relative overflow-hidden">
-          <div className="absolute -top-16 -right-16 w-48 h-48 bg-red-50 rounded-full opacity-60" />
-          <div className="absolute -bottom-10 -left-10 w-36 h-36 bg-gray-50 rounded-full opacity-80" />
-          <div className="relative z-10">
-            <h2 className="text-4xl font-serif tracking-tight text-gray-900 mb-4">
-              Ready to make every call count?
-            </h2>
-            <p className="text-base text-gray-500 leading-relaxed max-w-md mx-auto mb-8">
-              Join contact centers already using CallSense to reduce
-              escalations, protect agents, and serve customers better.
-            </p>
-            <div className="flex items-center justify-center gap-4">
-              <button className="bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-6 py-3 rounded-lg transition-colors">
-                Book a demo
-              </button>
-              <button className="border border-gray-200 text-gray-600 hover:border-gray-400 hover:text-gray-900 text-sm px-5 py-3 rounded-lg transition-colors">
-                Talk to sales
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {/* FOOTER */}
       <footer className="border-t border-gray-100 py-6 px-10 max-w-6xl mx-auto flex items-center justify-between">
         <div className="flex items-center gap-2 text-base font-semibold text-gray-900">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-          CallSense
+          Affecta
         </div>
         <p className="text-xs text-gray-400">
-          © 2025 CallSense. All rights reserved.
+          © 2025 Affecta. All rights reserved.
         </p>
       </footer>
     </div>

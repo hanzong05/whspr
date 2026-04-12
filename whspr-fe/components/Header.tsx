@@ -17,7 +17,12 @@ const pageTitles: Record<string, { title: string; description: string }> = {
   "/reports": { title: "Reports", description: "Emotional analysis reports" },
 };
 
-export default function Header() {
+interface HeaderProps {
+  // Optional — LandingPage passes this to get a handle on openLoginModal
+  onExposeOpenLogin?: (fn: () => void) => void;
+}
+
+export default function Header({ onExposeOpenLogin }: HeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
 
@@ -33,73 +38,104 @@ export default function Header() {
   useEffect(() => {
     const token = localStorage.getItem("token");
     const stored = localStorage.getItem("user");
-    setIsLoggedIn(!!token);
-    if (stored) {
+
+    if (token && stored) {
       try {
-        setUser(JSON.parse(stored));
+        const parsedUser = JSON.parse(stored);
+        setUser(parsedUser);
+        setIsLoggedIn(true);
+
+        if (pathname === "/") {
+          const role = parsedUser?.role?.toLowerCase();
+          router.push(role === "agent" ? "/dashboard/record" : "/dashboard");
+        }
+        return;
       } catch {
-        setUser(null);
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
       }
     }
-  }, [pathname]);
+
+    setIsLoggedIn(false);
+    setUser(null);
+  }, [pathname, router]);
+
+  // Expose openLoginModal to parent (LandingPage) if requested
+  useEffect(() => {
+    if (onExposeOpenLogin) {
+      onExposeOpenLogin(openLoginModal);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onExposeOpenLogin]);
 
   const matchedKey = Object.keys(pageTitles)
     .filter((key) =>
-      key === "/" ? pathname === "/" : pathname.startsWith(key),
+      key === "/dashboard"
+        ? pathname === "/dashboard"
+        : pathname.startsWith(key),
     )
     .sort((a, b) => b.length - a.length)[0];
 
   const page = pageTitles[matchedKey] ?? {
-    title: "whspr",
+    title: "Affecta",
     description: "CSR Call Analysis",
   };
 
   const openLoginModal = () => {
+    const token = localStorage.getItem("token");
+    const stored = localStorage.getItem("user");
+
+    if (token && stored) {
+      try {
+        const parsedUser = JSON.parse(stored);
+        const role = parsedUser?.role?.toLowerCase();
+
+        setUser(parsedUser);
+        setIsLoggedIn(true);
+
+        router.push(role === "agent" ? "/dashboard/record" : "/dashboard");
+        return;
+      } catch {
+        localStorage.removeItem("token");
+        localStorage.removeItem("user");
+      }
+    }
+
     setEmail("");
     setPassword("");
     setError("");
     setShowPw(false);
     setShowLoginModal(true);
   };
-
   const handleLogin = async () => {
     setError("");
     if (!email || !password) {
       setError("Please fill in all fields.");
       return;
     }
-
     setLoading(true);
-
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 8000); // 8s timeout
-
+      const timeout = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: email, password }),
         signal: controller.signal,
       });
-
       clearTimeout(timeout);
-
       if (!res.ok) {
         const d = await res.json().catch(() => ({ detail: "Server error" }));
         setError(d.detail ?? "Invalid email or password.");
         return;
       }
-
       const data = await res.json();
-
       localStorage.setItem("token", data.id.toString());
       localStorage.setItem("user", JSON.stringify(data));
-
       setUser(data);
       setIsLoggedIn(true);
       setShowLoginModal(false);
-
-      const role = data.role?.toLowerCase(); // ← was data.agent_role (bug)
+      const role = data.role?.toLowerCase();
       router.push(role === "agent" ? "/dashboard/record" : "/dashboard");
     } catch (err: any) {
       if (err.name === "AbortError") {
@@ -128,16 +164,15 @@ export default function Header() {
 
   return (
     <>
-      {/* ── LOGIN MODAL ── */}
+      {/* LOGIN MODAL */}
       {showLoginModal && (
         <Modal onClose={() => setShowLoginModal(false)} maxWidth="sm">
           <Modal.Header
-            title="Sign in to whspr"
+            title="Sign in to Affecta"
             description="Enter your credentials to continue"
             onClose={() => setShowLoginModal(false)}
           />
           <Modal.Body>
-            {/* Email / username */}
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1.5 tracking-wide">
                 Email or Agent ID
@@ -160,7 +195,7 @@ export default function Header() {
                   type="text"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@whspr.com or 0001"
+                  placeholder="you@affecta.com or 0001"
                   autoComplete="username"
                   onKeyDown={(e) => e.key === "Enter" && handleLogin()}
                   className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400 focus:border-transparent placeholder-gray-300 text-gray-800"
@@ -168,7 +203,6 @@ export default function Header() {
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-semibold text-gray-600 tracking-wide">
@@ -248,7 +282,6 @@ export default function Header() {
               </div>
             </div>
 
-            {/* Error */}
             {error && (
               <div className="flex items-center gap-2 px-3.5 py-2.5 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600 font-medium">
                 <svg
@@ -279,11 +312,7 @@ export default function Header() {
             <button
               onClick={handleLogin}
               disabled={loading}
-              className={`flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors ${
-                loading
-                  ? "bg-red-300 cursor-not-allowed"
-                  : "bg-red-500 hover:bg-red-600"
-              }`}
+              className={`flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors ${loading ? "bg-red-300 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"}`}
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
@@ -316,55 +345,16 @@ export default function Header() {
         </Modal>
       )}
 
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <header className="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6">
-        {/* Page title */}
         <div>
           <h1 className="text-lg font-semibold text-gray-800">{page.title}</h1>
           <p className="text-xs text-gray-400">{page.description}</p>
         </div>
 
-        {/* Right actions */}
         <div className="flex items-center gap-3">
-          {/* Search */}
-          <button className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-              />
-            </svg>
-          </button>
-
-          {/* Notifications */}
-          <button className="relative p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-              />
-            </svg>
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
-          </button>
-
-          {/* Divider */}
           <div className="w-px h-6 bg-gray-200" />
 
-          {/* Avatar — shows initial when logged in */}
           <div
             className="w-8 h-8 rounded-full bg-red-500 flex items-center justify-center cursor-pointer select-none"
             title={user?.agent_name ?? ""}
@@ -388,7 +378,6 @@ export default function Header() {
             )}
           </div>
 
-          {/* Login / Logout — conditional */}
           {isLoggedIn ? (
             <button
               onClick={handleLogout}

@@ -291,7 +291,7 @@ export default function RegisterPage() {
               className="text-gray-900 text-lg font-bold"
               style={{ fontFamily: "'DM Serif Display', Georgia, serif" }}
             >
-              whspr
+              Affecta
             </span>
           </div>
 
