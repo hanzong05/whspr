@@ -1,6 +1,7 @@
 "use client";
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import Modal from "@/components/ui/Modal";
 
 const API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -82,6 +83,11 @@ export default function RegisterPage() {
   const [showCpw, setShowCpw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successData, setSuccessData] = useState<{
+    username: string;
+    agent_name: string;
+    role: string;
+  } | null>(null);
   const [roles, setRoles] = useState<RoleOption[]>([]);
   const [rolesLoading, setRolesLoading] = useState(true);
   const [selectedRole, setSelectedRole] = useState("");
@@ -213,12 +219,26 @@ export default function RegisterPage() {
       }
 
       setLoading(false);
-      router.push("/dashboard/register");
+      setSuccessData({
+        username: d.username,
+        agent_name: d.agent_name,
+        role: d.role,
+      });
     } catch {
       setError("Network error. Please try again.");
       setLoading(false);
     }
   };
+  const resetForm = () => {
+    setSelectedAgent(null);
+    setAgentSearch("");
+    setPassword("");
+    setConfirmPassword("");
+    setError("");
+    setSuccessData(null);
+    if (roles.length > 0) setSelectedRole(roles[0].value);
+  };
+
   const pwMatch = confirmPassword.length > 0 && password === confirmPassword;
   const pwMismatch = confirmPassword.length > 0 && password !== confirmPassword;
 
@@ -259,8 +279,92 @@ export default function RegisterPage() {
       </svg>
     );
 
+  const roleConfig: Record<string, { badge: string; dot: string }> = {
+    admin: { badge: "bg-purple-100 text-purple-700", dot: "bg-purple-500" },
+    supervisor: { badge: "bg-blue-100 text-blue-700", dot: "bg-blue-500" },
+    agent: { badge: "bg-gray-100 text-gray-600", dot: "bg-gray-400" },
+  };
+
   return (
     <div className="w-full h-full">
+      {/* ── SUCCESS MODAL ── */}
+      {successData && (
+        <Modal onClose={resetForm} maxWidth="sm">
+          <Modal.Body>
+            <div className="flex flex-col items-center gap-4 py-4">
+              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8 text-green-500"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2.5}
+                    d="M5 13l4 4L19 7"
+                  />
+                </svg>
+              </div>
+
+              <div className="text-center">
+                <h3 className="text-lg font-bold text-gray-800 mb-1">
+                  Account Created!
+                </h3>
+                <p className="text-sm text-gray-500">
+                  The account has been set up successfully.
+                </p>
+              </div>
+
+              <div className="w-full bg-gray-50 rounded-xl p-4 flex flex-col gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 text-sm font-bold flex items-center justify-center flex-shrink-0">
+                    {successData.agent_name.charAt(0)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-gray-800">
+                      {successData.agent_name}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      @{successData.username}
+                    </p>
+                  </div>
+                  <span
+                    className={`ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold capitalize ${
+                      roleConfig[successData.role]?.badge ??
+                      "bg-gray-100 text-gray-600"
+                    }`}
+                  >
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        roleConfig[successData.role]?.dot ?? "bg-gray-400"
+                      }`}
+                    />
+                    {successData.role}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Modal.Body>
+
+          <Modal.Footer>
+            <button
+              onClick={() => router.push("/dashboard/users")}
+              className="flex-1 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+            >
+              View Users
+            </button>
+            <button
+              onClick={resetForm}
+              className="flex-1 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors"
+            >
+              Create Another
+            </button>
+          </Modal.Footer>
+        </Modal>
+      )}
+
       {/* ── LEFT PANEL ── */}
 
       {/* ── RIGHT PANEL ── */}
