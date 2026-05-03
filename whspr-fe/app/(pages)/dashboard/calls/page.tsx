@@ -17,6 +17,13 @@ type Emotion =
   | "happy"
   | "satisfied";
 
+interface TranscriptionSegment {
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string;
+}
+
 interface AgentOption {
   id: number;
   name: string;
@@ -40,6 +47,12 @@ interface CallRow {
     confidence: number;
     risk_level: RiskLevel;
     transcription_text: string | null;
+    transcription_segments?: TranscriptionSegment[];
+    model_results?: {
+      svm?: { emotion: Emotion; confidence: number };
+      rf?: { emotion: Emotion; confidence: number };
+      knn?: { emotion: Emotion; confidence: number };
+    };
   } | null;
   recommendation: {
     action: string;
@@ -73,9 +86,9 @@ function fmt(s: string) {
 }
 
 function fmtDuration(sec: number | null) {
-  if (!sec) return "—";
-  const m = Math.floor(sec / 60),
-    s2 = sec % 60;
+  if (sec === null || sec === undefined || isNaN(sec)) return "—";
+  const m = Math.floor(sec / 60);
+  const s2 = Math.floor(sec % 60);
   return `${m}:${String(s2).padStart(2, "0")}`;
 }
 
@@ -86,6 +99,374 @@ function fmtDate(d: string | null) {
     day: "numeric",
     year: "numeric",
   });
+}
+
+// ── Player Modal ──────────────────────────────────────────────────────────────
+
+function PlayerModal({
+  call,
+  onClose,
+}: {
+  call: CallRow;
+  onClose: () => void;
+}) {
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const subtitleRef = useRef<HTMLDivElement>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [audioError, setAudioError] = useState(false);
+
+  const segments = call.analysis?.transcription_segments ?? [];
+  const hasSegments = segments.length > 0;
+
+  // Find the active subtitle segment
+  useEffect(() => {
+    if (!hasSegments) return;
+    let idx = -1;
+    for (let i = 0; i < segments.length; i++) {
+      if (currentTime >= segments[i].start && currentTime <= segments[i].end) {
+        idx = i;
+        break;
+      }
+    }
+    // Fallback: last segment whose start has passed
+    if (idx === -1) {
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (currentTime >= segments[i].start) {
+          idx = i;
+          break;
+        }
+      }
+    }
+    setActiveIndex(idx);
+  }, [currentTime, segments, hasSegments]);
+
+  // Auto-scroll active segment into view
+  useEffect(() => {
+    if (activeIndex < 0 || !subtitleRef.current) return;
+    const el = subtitleRef.current.querySelector(
+      `[data-idx="${activeIndex}"]`,
+    ) as HTMLElement | null;
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [activeIndex]);
+
+  const togglePlay = () => {
+    const a = audioRef.current;
+    if (!a) return;
+    isPlaying ? a.pause() : a.play().catch(() => setAudioError(true));
+  };
+
+  const seekTo = (time: number) => {
+    const a = audioRef.current;
+    if (!a) return;
+    a.currentTime = Math.max(0, Math.min(duration || 0, time));
+  };
+
+  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!duration) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    seekTo(((e.clientX - rect.left) / rect.width) * duration);
+  };
+
+  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    setVolume(v);
+    if (audioRef.current) audioRef.current.volume = v;
+  };
+
+  const progress = duration ? (currentTime / duration) * 100 : 0;
+
+  return (
+    <Modal onClose={onClose} maxWidth="lg">
+      <Modal.Header
+        title="Play Recording"
+        description={call.filename}
+        onClose={onClose}
+      />
+      <Modal.Body>
+        {/* ── Subtitle / transcript panel ── */}
+        <div
+          ref={subtitleRef}
+          className="h-60 overflow-y-auto bg-gray-950 rounded-xl p-3 space-y-0.5 scroll-smooth"
+        >
+          {hasSegments ? (
+            segments.map((seg, i) => {
+              const isActive = i === activeIndex;
+              const isPast = currentTime > seg.end;
+              return (
+                <div
+                  key={i}
+                  data-idx={i}
+                  onClick={() => {
+                    seekTo(seg.start);
+                    audioRef.current?.play().catch(() => setAudioError(true));
+                  }}
+                  className={`
+                    flex gap-3 px-3 py-2 rounded-lg cursor-pointer select-none
+                    transition-all duration-150 group
+                    ${
+                      isActive
+                        ? "bg-red-600/25 border border-red-500/40"
+                        : "hover:bg-white/5 border border-transparent"
+                    }
+                  `}
+                >
+                  {/* Timestamp */}
+                  <span
+                    className={`
+                    text-xs font-mono mt-0.5 w-10 flex-shrink-0 tabular-nums
+                    ${isActive ? "text-red-400" : isPast ? "text-gray-600" : "text-gray-500"}
+                  `}
+                  >
+                    {fmtDuration(Math.floor(seg.start))}
+                  </span>
+
+                  {/* Speaker label */}
+                  {seg.speaker && (
+                    <span
+                      className={`
+                      text-xs font-bold mt-0.5 w-6 flex-shrink-0 uppercase
+                      ${seg.speaker.toUpperCase().includes("AGENT") ? "text-blue-400" : "text-amber-400"}
+                    `}
+                    >
+                      {seg.speaker.charAt(0)}
+                    </span>
+                  )}
+
+                  {/* Transcript text */}
+                  <p
+                    className={`
+                    text-sm leading-relaxed flex-1 transition-colors
+                    ${
+                      isActive
+                        ? "text-white font-medium"
+                        : isPast
+                          ? "text-gray-500"
+                          : "text-gray-300"
+                    }
+                  `}
+                  >
+                    {seg.text.trim()}
+                  </p>
+
+                  {/* Active indicator bars */}
+                  {isActive && (
+                    <span className="flex-shrink-0 mt-1.5">
+                      <span className="flex gap-0.5 items-end h-3">
+                        {[8, 12, 6].map((h, b) => (
+                          <span
+                            key={b}
+                            className="w-0.5 bg-red-400 rounded-full animate-pulse"
+                            style={{
+                              height: `${h}px`,
+                              animationDelay: `${b * 0.15}s`,
+                            }}
+                          />
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                </div>
+              );
+            })
+          ) : call.analysis?.transcription_text ? (
+            <div className="px-3 py-2">
+              <p className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wide">
+                Full Transcription
+              </p>
+              <p className="text-sm text-gray-300 leading-relaxed">
+                {call.analysis.transcription_text}
+              </p>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-sm text-gray-600">
+                No transcription available
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* ── Hidden audio element ── */}
+        <audio
+          ref={audioRef}
+          src={`${API}/calls/${call.id}/audio`}
+          onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
+          onDurationChange={(e) => setDuration(e.currentTarget.duration)}
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => {
+            setIsPlaying(false);
+            setCurrentTime(0);
+          }}
+          onError={() => setAudioError(true)}
+          preload="metadata"
+        />
+
+        {/* ── Error banner ── */}
+        {audioError && (
+          <div className="flex items-center gap-2 px-3 py-2.5 bg-red-50 border border-red-100 rounded-xl text-xs text-red-600">
+            <svg
+              className="w-4 h-4 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+              />
+            </svg>
+            Audio file could not be loaded. It may have been moved or deleted.
+          </div>
+        )}
+
+        {/* ── Progress bar ── */}
+        <div className="space-y-1">
+          <div
+            onClick={handleProgressClick}
+            className="relative h-1.5 bg-gray-100 rounded-full cursor-pointer group"
+          >
+            <div
+              className="h-full bg-red-500 rounded-full relative transition-all"
+              style={{ width: `${progress}%` }}
+            >
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-red-500 rounded-full border-2 border-white shadow-md opacity-0 group-hover:opacity-100 transition-opacity" />
+            </div>
+          </div>
+          <div className="flex justify-between text-xs text-gray-400 font-mono tabular-nums">
+            <span>{fmtDuration(Math.floor(currentTime))}</span>
+            <span>{fmtDuration(Math.floor(duration))}</span>
+          </div>
+        </div>
+
+        {/* ── Controls ── */}
+        <div className="flex items-center gap-4">
+          {/* Volume */}
+          <div className="flex items-center gap-1.5 flex-1">
+            <svg
+              className="w-4 h-4 text-gray-400 flex-shrink-0"
+              fill="currentColor"
+              viewBox="0 0 24 24"
+            >
+              {volume === 0 ? (
+                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z" />
+              ) : (
+                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" />
+              )}
+            </svg>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={volume}
+              onChange={handleVolumeChange}
+              className="w-20 h-1 accent-red-500 cursor-pointer"
+            />
+          </div>
+
+          {/* Rewind 10s */}
+          <button
+            onClick={() => seekTo(currentTime - 10)}
+            title="Back 10s"
+            className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0019 16V8a1 1 0 00-1.6-.8l-5.334 4z"
+              />
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M4.066 11.2a1 1 0 000 1.6l5.334 4A1 1 0 0011 16V8a1 1 0 00-1.6-.8l-5.334 4z"
+              />
+            </svg>
+          </button>
+
+          {/* Play / Pause */}
+          <button
+            onClick={togglePlay}
+            disabled={audioError}
+            className={`
+              w-12 h-12 rounded-full flex items-center justify-center shadow-sm transition-colors
+              ${
+                audioError
+                  ? "bg-gray-200 text-gray-400 cursor-not-allowed"
+                  : "bg-red-500 hover:bg-red-600 text-white"
+              }
+            `}
+          >
+            {isPlaying ? (
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
+              </svg>
+            ) : (
+              <svg
+                className="w-5 h-5 translate-x-0.5"
+                fill="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            )}
+          </button>
+
+          {/* Forward 10s */}
+          <button
+            onClick={() => seekTo(currentTime + 10)}
+            title="Forward 10s"
+            className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <svg
+              className="w-5 h-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M11.933 12.8a1 1 0 000-1.6L6.6 7.2A1 1 0 005 8v8a1 1 0 001.6.8l5.333-4zM19.933 12.8a1 1 0 000-1.6l-5.333-4A1 1 0 0013 8v8a1 1 0 001.6.8l5.333-4z"
+              />
+            </svg>
+          </button>
+
+          {/* Segment count */}
+          <div className="flex-1 flex justify-end">
+            {hasSegments && (
+              <span className="text-xs text-gray-400 tabular-nums">
+                {segments.length} segment{segments.length !== 1 ? "s" : ""}
+              </span>
+            )}
+          </div>
+        </div>
+      </Modal.Body>
+      <Modal.Footer>
+        <button
+          onClick={onClose}
+          className="flex-1 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
+        >
+          Close
+        </button>
+      </Modal.Footer>
+    </Modal>
+  );
 }
 
 // ── Upload modal ───────────────────────────────────────────────────────────────
@@ -154,6 +535,7 @@ function UploadContent({
       const callId: number | undefined = data.call_id;
       const ea = data.emotion_analysis ?? {};
       const rec = data.csr_recommendations ?? {};
+      const mr = data.model_results ?? {};
       setResult({
         id: callId ?? 0,
         filename: file.name,
@@ -167,6 +549,12 @@ function UploadContent({
           confidence: ea.confidence ?? 0,
           risk_level: ea.risk_level ?? "Low",
           transcription_text: data.transcription?.text ?? null,
+          transcription_segments: data.transcription?.segments ?? [],
+          model_results: {
+            svm: mr.svm,
+            rf: mr.rf,
+            knn: mr.knn,
+          },
         },
         recommendation: {
           action: rec.action_required?.action ?? "NONE",
@@ -437,6 +825,33 @@ function UploadContent({
                 </span>
               </div>
             </div>
+            {result.analysis.model_results && (
+              <div className="bg-gray-50 rounded-xl p-4">
+                <p className="text-xs text-gray-400 mb-2">Model Comparison</p>
+                <div className="space-y-1 text-sm">
+                  {(["svm", "rf", "knn"] as const).map((modelKey) => {
+                    const model = result.analysis?.model_results?.[modelKey];
+                    if (!model) return null;
+                    return (
+                      <div
+                        key={modelKey}
+                        className="flex justify-between gap-3"
+                      >
+                        <span className="font-semibold uppercase text-gray-600">
+                          {modelKey}
+                        </span>
+                        <span
+                          className={`font-medium ${emotionColor[model.emotion] ?? "text-gray-700"}`}
+                        >
+                          {fmt(model.emotion)} (
+                          {(model.confidence * 100).toFixed(0)}%)
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {result.analysis.transcription_text && (
               <div className="bg-gray-50 rounded-xl p-4">
                 <p className="text-xs font-medium text-gray-500 mb-1">
@@ -485,11 +900,12 @@ export default function CallsPage() {
   const [search, setSearch] = useState("");
 
   const [showUpload, setShowUpload] = useState(false);
+  const [playTarget, setPlayTarget] = useState<CallRow | null>(null);
   const [viewTarget, setViewTarget] = useState<CallRow | null>(null);
   const [editTarget, setEditTarget] = useState<CallRow | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CallRow | null>(null);
   const [deleteError, setDeleteError] = useState<string>("");
-
+  const [deletePassword, setDeletePassword] = useState("");
   const [editAgentId, setEditAgentId] = useState<string>("");
 
   const fetchCalls = async () => {
@@ -543,16 +959,26 @@ export default function CallsPage() {
     if (!deleteTarget) return;
     setDeleteError("");
     try {
+      const stored = localStorage.getItem("user");
+      const currentUser = stored ? JSON.parse(stored) : null;
+      if (!currentUser?.id) {
+        setDeleteError("You must be logged in to delete.");
+        return;
+      }
       const res = await fetch(`${API}/calls/${deleteTarget.id}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          password: deletePassword,
+        }),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setDeleteError(
-          data?.detail || "Failed to delete call. Please try again.",
-        );
+        setDeleteError(data?.detail || "Failed to delete call.");
         return;
       }
+      setDeletePassword("");
       setDeleteTarget(null);
       fetchCalls();
     } catch {
@@ -569,6 +995,11 @@ export default function CallsPage() {
 
   return (
     <div>
+      {/* ── Player Modal ── */}
+      {playTarget && (
+        <PlayerModal call={playTarget} onClose={() => setPlayTarget(null)} />
+      )}
+
       {/* ── View Modal ── */}
       {viewTarget && (
         <Modal onClose={() => setViewTarget(null)} maxWidth="md">
@@ -625,6 +1056,36 @@ export default function CallsPage() {
                     </span>
                   </div>
                 </div>
+                {viewTarget.analysis.model_results && (
+                  <div className="bg-gray-50 rounded-xl p-4">
+                    <p className="text-xs text-gray-400 mb-2">
+                      Model Comparison
+                    </p>
+                    <div className="space-y-1 text-sm">
+                      {(["svm", "rf", "knn"] as const).map((modelKey) => {
+                        const model =
+                          viewTarget.analysis?.model_results?.[modelKey];
+                        if (!model) return null;
+                        return (
+                          <div
+                            key={modelKey}
+                            className="flex justify-between gap-3"
+                          >
+                            <span className="font-semibold uppercase text-gray-600">
+                              {modelKey}
+                            </span>
+                            <span
+                              className={`font-medium ${emotionColor[model.emotion] ?? "text-gray-700"}`}
+                            >
+                              {fmt(model.emotion)} (
+                              {(model.confidence * 100).toFixed(0)}%)
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
                 {viewTarget.analysis.transcription_text && (
                   <div className="bg-gray-50 rounded-xl p-4">
                     <p className="text-xs font-medium text-gray-500 mb-1">
@@ -712,6 +1173,7 @@ export default function CallsPage() {
             onClose={() => {
               setDeleteTarget(null);
               setDeleteError("");
+              setDeletePassword("");
             }}
           />
           <Modal.Body>
@@ -729,6 +1191,26 @@ export default function CallsPage() {
                   d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
                 />
               </svg>
+            </div>
+            <p className="text-sm text-gray-500 text-center">
+              Are you sure you want to delete this call?
+              <br />
+              <span className="text-red-500 font-medium">
+                This will permanently remove analysis, recommendations, and
+                escalations.
+              </span>
+            </p>
+            <div>
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Confirm your password
+              </label>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Enter your password"
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
             </div>
             {deleteError && (
               <div className="flex items-start gap-2.5 px-3.5 py-3 bg-red-50 border border-red-200 rounded-xl">
@@ -748,19 +1230,13 @@ export default function CallsPage() {
                 <p className="text-xs text-red-700">{deleteError}</p>
               </div>
             )}
-            <p className="text-sm text-gray-500 text-center">
-              Are you sure you want to delete{" "}
-              <span className="font-medium text-gray-700">
-                {deleteTarget.filename}
-              </span>
-              ? This cannot be undone.
-            </p>
           </Modal.Body>
           <Modal.Footer>
             <button
               onClick={() => {
                 setDeleteTarget(null);
                 setDeleteError("");
+                setDeletePassword("");
               }}
               className="flex-1 py-2.5 text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors"
             >
@@ -768,7 +1244,12 @@ export default function CallsPage() {
             </button>
             <button
               onClick={handleDelete}
-              className="flex-1 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors"
+              disabled={!deletePassword}
+              className={`flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors ${
+                deletePassword
+                  ? "bg-red-500 hover:bg-red-600"
+                  : "bg-gray-300 cursor-not-allowed"
+              }`}
             >
               Delete
             </button>
@@ -904,6 +1385,7 @@ export default function CallsPage() {
                   key={call.id}
                   className="hover:bg-gray-50 transition-colors"
                 >
+                  {/* File */}
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
                       <svg
@@ -918,6 +1400,8 @@ export default function CallsPage() {
                       </span>
                     </div>
                   </td>
+
+                  {/* Agent */}
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-red-100 text-red-600 text-xs font-bold flex items-center justify-center flex-shrink-0">
@@ -928,26 +1412,46 @@ export default function CallsPage() {
                       </span>
                     </div>
                   </td>
+
+                  {/* Cluster */}
                   <td className="px-5 py-4 text-gray-500">
                     {call.cluster?.name ?? "—"}
                   </td>
+
+                  {/* Date */}
                   <td className="px-5 py-4 text-gray-500">
                     {fmtDate(call.call_date)}
                   </td>
+
+                  {/* Duration */}
                   <td className="px-5 py-4 text-gray-500">
                     {fmtDuration(call.duration_sec)}
                   </td>
+
+                  {/* Emotion */}
                   <td className="px-5 py-4">
                     {call.analysis ? (
-                      <span
-                        className={`font-medium ${emotionColor[call.analysis.predicted_emotion] ?? "text-gray-500"}`}
-                      >
-                        {fmt(call.analysis.predicted_emotion)}
-                      </span>
+                      <div>
+                        <span
+                          className={`font-medium ${emotionColor[call.analysis.predicted_emotion] ?? "text-gray-500"}`}
+                        >
+                          {fmt(call.analysis.predicted_emotion)}
+                        </span>
+                        {call.analysis.model_results && (
+                          <div className="text-xs text-gray-400 mt-1 leading-relaxed">
+                            S: {call.analysis.model_results.svm?.emotion ?? "-"}{" "}
+                            | R:{" "}
+                            {call.analysis.model_results.rf?.emotion ?? "-"} |
+                            K: {call.analysis.model_results.knn?.emotion ?? "-"}
+                          </div>
+                        )}
+                      </div>
                     ) : (
                       <span className="text-gray-300">—</span>
                     )}
                   </td>
+
+                  {/* Risk */}
                   <td className="px-5 py-4">
                     {call.analysis ? (
                       <span
@@ -959,6 +1463,8 @@ export default function CallsPage() {
                       <span className="text-gray-300">—</span>
                     )}
                   </td>
+
+                  {/* Recommendation */}
                   <td className="px-5 py-4 max-w-48">
                     <span className="text-sm text-gray-600 line-clamp-1">
                       {call.recommendation?.recommended_tone ??
@@ -966,15 +1472,34 @@ export default function CallsPage() {
                         "—"}
                     </span>
                   </td>
+
+                  {/* Actions */}
                   <td className="px-5 py-4">
-                    <ActionButtons
-                      onView={() => setViewTarget(call)}
-                      onEdit={() => openEdit(call)}
-                      onDelete={() => {
-                        setDeleteError("");
-                        setDeleteTarget(call);
-                      }}
-                    />
+                    <div className="flex items-center gap-1.5">
+                      {/* Play button */}
+                      <button
+                        onClick={() => setPlayTarget(call)}
+                        title="Play recording"
+                        className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <svg
+                          className="w-4 h-4"
+                          fill="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path d="M8 5v14l11-7z" />
+                        </svg>
+                      </button>
+                      <ActionButtons
+                        onView={() => setViewTarget(call)}
+                        onEdit={() => openEdit(call)}
+                        onDelete={() => {
+                          setDeleteError("");
+                          setDeletePassword("");
+                          setDeleteTarget(call);
+                        }}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))

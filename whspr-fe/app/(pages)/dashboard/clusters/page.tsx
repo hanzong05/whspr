@@ -62,7 +62,7 @@ export default function ClustersPage() {
   const [formName, setFormName] = useState("");
   const [formError, setFormError] = useState("");
   const [deleteError, setDeleteError] = useState("");
-
+  const [deletePassword, setDeletePassword] = useState("");
   const fetchClusters = async () => {
     setLoading(true);
     try {
@@ -151,20 +151,35 @@ export default function ClustersPage() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
+
     setDeleteError("");
+
     try {
-      const res = await fetch(`${API}/clusters/${deleteTarget.id}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        setDeleteError(
-          err?.detail?.includes("related agents or calls")
-            ? "This cluster has agents or calls assigned to it. Reassign or remove them first."
-            : err?.detail || "Failed to delete cluster. Please try again.",
-        );
+      const stored = localStorage.getItem("user");
+      const currentUser = stored ? JSON.parse(stored) : null;
+
+      if (!currentUser?.id) {
+        setDeleteError("You must be logged in to delete.");
         return;
       }
+
+      const res = await fetch(`${API}/clusters/${deleteTarget.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_id: currentUser.id,
+          password: deletePassword,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setDeleteError(data?.detail || "Failed to delete cluster.");
+        return;
+      }
+
+      setDeletePassword("");
       setDeleteTarget(null);
       fetchClusters();
     } catch {
@@ -346,6 +361,7 @@ export default function ClustersPage() {
           onClose={() => {
             setDeleteTarget(null);
             setDeleteError("");
+            setDeletePassword("");
           }}
           maxWidth="sm"
         >
@@ -357,6 +373,18 @@ export default function ClustersPage() {
             }}
           />
           <Modal.Body>
+            <div className="mt-3">
+              <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                Confirm your password
+              </label>
+              <input
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Enter your password"
+                className="w-full px-3 py-2.5 text-sm border border-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-red-400"
+              />
+            </div>
             <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto">
               <svg
                 className="w-6 h-6 text-red-500"
@@ -395,7 +423,12 @@ export default function ClustersPage() {
               <span className="font-medium text-gray-700">
                 {deleteTarget.name}
               </span>
-              ? All associated data will be removed.
+              ?
+              <br />
+              <span className="text-red-500 font-medium">
+                This will delete ALL calls under this cluster and may affect
+                assigned agents.
+              </span>
             </p>
           </Modal.Body>
           <Modal.Footer>
@@ -410,7 +443,12 @@ export default function ClustersPage() {
             </button>
             <button
               onClick={handleDelete}
-              className="flex-1 py-2.5 text-sm font-medium text-white bg-red-500 hover:bg-red-600 rounded-xl transition-colors"
+              disabled={!deletePassword}
+              className={`flex-1 py-2.5 text-sm font-medium text-white rounded-xl transition-colors ${
+                deletePassword
+                  ? "bg-red-500 hover:bg-red-600"
+                  : "bg-gray-300 cursor-not-allowed"
+              }`}
             >
               Delete
             </button>

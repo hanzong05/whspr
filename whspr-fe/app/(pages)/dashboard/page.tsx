@@ -22,7 +22,12 @@ const CLUSTER_COLORS = [
   "#3b82f6",
   "#8b5cf6",
 ];
-
+const RISK_COLORS: Record<string, string> = {
+  Critical: "#ef4444",
+  High: "#f97316",
+  Medium: "#eab308",
+  Low: "#22c55e",
+};
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface ClusterRow {
@@ -97,6 +102,19 @@ export default function Dashboard() {
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [agentRisk, setAgentRisk] = useState<AgentRisk[]>([]);
   const [recentCall, setRecentCall] = useState<RecentCall | null>(null);
+  const [agentDailyTrend, setAgentDailyTrend] = useState<any[]>([]);
+  const [agentPastTrend, setAgentPastTrend] = useState<any[]>([]);
+  const [flaggedDailyTrend, setFlaggedDailyTrend] = useState<any[]>([]);
+  const [userRole, setUserRole] = useState<string>("");
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("user");
+      if (raw) setUserRole(JSON.parse(raw)?.role?.toLowerCase() ?? "");
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -115,14 +133,28 @@ export default function Dashboard() {
       fetch(`${API}/calls`)
         .then((r) => r.json())
         .catch(() => []),
-    ]).then(([cls, sum, vol, ar, calls]) => {
-      setClusters(cls);
-      setSummary(sum);
-      setTrend(vol);
-      setAgentRisk(ar.slice(0, 5));
-      // most recent call that has an analysis
-      const withAnalysis = (calls as RecentCall[]).find((c) => c.analysis);
-      setRecentCall(withAnalysis ?? calls[0] ?? null);
+      fetch(`${API}/reports/agent-daily-trend`)
+        .then((r) => r.json())
+        .catch(() => []),
+      fetch(`${API}/reports/agent-past-trend`)
+        .then((r) => r.json())
+        .catch(() => []),
+      fetch(`${API}/reports/flagged-agent-daily-trend`)
+        .then((r) => r.json())
+        .catch(() => []),
+    ]).then(([cls, sum, vol, ar, calls, daily, past, flagged]) => {
+      setClusters(Array.isArray(cls) ? cls : []);
+      setSummary(sum && typeof sum === "object" ? sum : null);
+      setTrend(Array.isArray(vol) ? vol : []);
+      setAgentRisk(Array.isArray(ar) ? ar.slice(0, 5) : []);
+
+      const safeCalls = Array.isArray(calls) ? calls : [];
+      const withAnalysis = safeCalls.find((c: RecentCall) => c.analysis);
+      setRecentCall(withAnalysis ?? safeCalls[0] ?? null);
+
+      setAgentDailyTrend(Array.isArray(daily) ? daily : []);
+      setAgentPastTrend(Array.isArray(past) ? past : []);
+      setFlaggedDailyTrend(Array.isArray(flagged) ? flagged : []);
     });
   }, []);
 
@@ -237,6 +269,115 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+      <div className="grid grid-cols-2 gap-6">
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h2 className="text-base font-semibold text-gray-700 mb-1">
+            Agent Daily Trend
+          </h2>
+          <p className="text-xs text-gray-400 mb-4">
+            Last 7 days risk movement
+          </p>
+
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart
+              data={Array.isArray(agentDailyTrend) ? agentDailyTrend : []}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+              <XAxis dataKey="day" tick={{ fontSize: 10, fill: "#9ca3af" }} />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 10, fill: "#9ca3af" }}
+              />
+              <Tooltip />
+              <Legend />
+              {["Critical", "High", "Medium", "Low"].map((key) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={RISK_COLORS[key]}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+          <h2 className="text-base font-semibold text-gray-700 mb-1">
+            Agent Past Trend
+          </h2>
+          <p className="text-xs text-gray-400 mb-4">
+            Last 6 months risk movement
+          </p>
+
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart
+              data={Array.isArray(agentPastTrend) ? agentPastTrend : []}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+              <XAxis dataKey="month" tick={{ fontSize: 10, fill: "#9ca3af" }} />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 10, fill: "#9ca3af" }}
+              />
+              <Tooltip />
+              <Legend />
+              {["Critical", "High", "Medium", "Low"].map((key) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={RISK_COLORS[key]}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      {userRole === "admin" && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm border border-red-100">
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-base font-semibold text-gray-700">
+              Flagged Agent Daily Trend
+            </h2>
+            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 text-red-700">
+              Admin
+            </span>
+          </div>
+          <p className="text-xs text-gray-400 mb-4">
+            Last 7 days risk movement from flagged agents
+          </p>
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={flaggedDailyTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+              <XAxis dataKey="day" tick={{ fontSize: 10, fill: "#9ca3af" }} />
+              <YAxis
+                allowDecimals={false}
+                tick={{ fontSize: 10, fill: "#9ca3af" }}
+              />
+              <Tooltip />
+              <Legend />
+              {["Critical", "High", "Medium", "Low"].map((key) => (
+                <Line
+                  key={key}
+                  type="monotone"
+                  dataKey={key}
+                  stroke={RISK_COLORS[key]}
+                  strokeWidth={2}
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* Bottom row */}
       <div className="grid grid-cols-2 gap-6">

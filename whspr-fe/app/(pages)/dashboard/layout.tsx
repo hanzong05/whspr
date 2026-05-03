@@ -15,6 +15,28 @@ type AppUser = {
   role?: string;
 };
 
+const ROLE_ACCESS: Record<string, string[]> = {
+  admin: [
+    "/dashboard",
+    "/dashboard/agents",
+    "/dashboard/flagged-agents",
+    "/dashboard/reports",
+    "/dashboard/register",
+    "/dashboard/users",
+  ],
+  // calls and clusters are supervisor-only
+
+  supervisor: [
+    "/dashboard",
+    "/dashboard/agents",
+    "/dashboard/reports",
+    "/dashboard/calls",
+    "/dashboard/clusters",
+  ],
+
+  agent: ["/dashboard/record"],
+};
+
 export default function DashboardLayout({
   children,
 }: {
@@ -27,6 +49,8 @@ export default function DashboardLayout({
   const [user, setUser] = useState<AppUser | null>(null);
 
   useEffect(() => {
+    setAuthorized(false);
+
     const rawUser = localStorage.getItem("user");
 
     if (!rawUser) {
@@ -36,20 +60,35 @@ export default function DashboardLayout({
 
     try {
       const parsedUser: AppUser = JSON.parse(rawUser);
-      setUser(parsedUser);
+      const role = parsedUser.role?.toLowerCase() || "";
 
-      const role = parsedUser.role?.toLowerCase();
+      const allowedRoutes = ROLE_ACCESS[role];
 
-      const restrictedRoles = ["agent"];
-
-      // 🔒 restrict routes
-      if (role && restrictedRoles.includes(role)) {
-        if (pathname !== "/dashboard/record") {
-          router.replace("/dashboard/record");
-          return;
-        }
+      if (!allowedRoutes) {
+        localStorage.removeItem("user");
+        router.replace("/login");
+        return;
       }
 
+      const isAllowed = allowedRoutes.some((route) => {
+        if (route === "/dashboard") {
+          return pathname === "/dashboard";
+        }
+
+        return pathname === route || pathname.startsWith(`${route}/`);
+      });
+
+      if (!isAllowed) {
+        if (role === "agent") {
+          router.replace("/dashboard/record");
+        } else {
+          router.replace("/dashboard");
+        }
+
+        return;
+      }
+
+      setUser(parsedUser);
       setAuthorized(true);
     } catch {
       localStorage.removeItem("user");
@@ -64,8 +103,7 @@ export default function DashboardLayout({
 
   return (
     <div className="flex min-h-screen">
-      {/* ❌ Hide Sidebar if agent */}
-      {!isAgent && <Sidebar />}
+      {!isAgent && <Sidebar userRole={role} />}
 
       <div className="flex min-w-0 flex-1 flex-col">
         <Header />

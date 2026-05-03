@@ -175,7 +175,11 @@ export default function RecordingPage() {
           body: formData,
         });
 
-        if (!response.ok) throw new Error("Analysis failed");
+        if (!response.ok) {
+          const text = await response.text();
+          console.error("❌ Backend error:", text);
+          throw new Error("Analysis failed");
+        }
 
         const result = await response.json();
         setAnalysisData(result);

@@ -61,6 +61,9 @@ const riskConfig: Record<RiskLevel, { badge: string; dot: string }> = {
   Safe: { badge: "bg-green-100 text-green-700", dot: "bg-green-500" },
 };
 
+const getRisk = (level: string | undefined): RiskLevel =>
+  (level as RiskLevel) in riskConfig ? (level as RiskLevel) : "Safe";
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function RegisterPage() {
   const router = useRouter();
@@ -209,6 +212,7 @@ export default function RegisterPage() {
         return;
       }
 
+      setLoading(false);
       router.push("/dashboard/register");
     } catch {
       setError("Network error. Please try again.");
@@ -412,10 +416,10 @@ export default function RegisterPage() {
                                   #{padId(agent.id)}
                                 </span>
                                 <span
-                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${riskConfig[agent.risk_level].badge}`}
+                                  className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${riskConfig[getRisk(agent.risk_level)].badge}`}
                                 >
                                   <span
-                                    className={`w-1 h-1 rounded-full ${riskConfig[agent.risk_level].dot}`}
+                                    className={`w-1 h-1 rounded-full ${riskConfig[getRisk(agent.risk_level)].dot}`}
                                   />
                                   {agent.risk_level}
                                 </span>
