@@ -45,6 +45,9 @@ const riskConfig: Record<
   },
 };
 
+const getRisk = (level: string | undefined | null): RiskLevel =>
+  (level as RiskLevel) in riskConfig ? (level as RiskLevel) : "Safe";
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ClustersPage() {
@@ -231,10 +234,10 @@ export default function ClustersPage() {
                 </p>
               </div>
               <span
-                className={`ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${riskConfig[viewTarget.overall_risk].badge}`}
+                className={`ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${riskConfig[getRisk(viewTarget.overall_risk)].badge}`}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full ${riskConfig[viewTarget.overall_risk].dot}`}
+                  className={`w-1.5 h-1.5 rounded-full ${riskConfig[getRisk(viewTarget.overall_risk)].dot}`}
                 />
                 {viewTarget.overall_risk}
               </span>
@@ -616,10 +619,10 @@ export default function ClustersPage() {
                   </td>
                   <td className="px-5 py-4">
                     <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${riskConfig[cluster.overall_risk].badge}`}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${riskConfig[getRisk(cluster.overall_risk)].badge}`}
                     >
                       <span
-                        className={`w-1.5 h-1.5 rounded-full ${riskConfig[cluster.overall_risk].dot}`}
+                        className={`w-1.5 h-1.5 rounded-full ${riskConfig[getRisk(cluster.overall_risk)].dot}`}
                       />
                       {cluster.overall_risk}
                     </span>
