@@ -9,6 +9,7 @@ import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from collections import defaultdict
 import librosa
 import warnings
 
@@ -21,48 +22,42 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # ============================================================================
 
-# Map your dataset emotion labels to the 6 emotions used in the system
 EMOTION_MAPPING = {
-    # RAVDESS dataset mapping (matches setup_ravdess.py)
+    # RAVDESS dataset mapping
     '01': 'neutral',
-    '02': 'neutral',  # calm -> neutral
+    '02': 'neutral',       # calm -> neutral
     '03': 'happy',
     '04': 'sad',
     '05': 'angry',
-    '06': 'frustrated',  # fearful -> frustrated
-    '07': 'frustrated',  # disgust -> frustrated
-    '08': 'satisfied',  # surprised -> satisfied
+    '06': 'sad',           # fearful -> sad (was frustrated)
+    '07': 'angry',         # disgust -> angry (was frustrated)
+    '08': 'satisfied',     # surprised -> satisfied
 
     # TESS (Toronto Emotional Speech Set) mapping
     'angry': 'angry',
-    'disgust': 'frustrated',
-    'fear': 'frustrated',
+    'disgust': 'angry',        # was frustrated, now angry
+    'fear': 'sad',             # was frustrated, now sad
     'happy': 'happy',
     'neutral': 'neutral',
     'pleasant_surprise': 'satisfied',
     'sad': 'sad',
 
-    # CREMA-D (Crowd-sourced Emotional Multimodal Actors Dataset) mapping
+    # CREMA-D mapping
     'ANG': 'angry',
-    'DIS': 'frustrated',
-    'FEA': 'frustrated',
+    'DIS': 'angry',        # was frustrated, now angry
+    'FEA': 'sad',          # was frustrated, now sad
     'HAP': 'happy',
     'NEU': 'neutral',
     'SAD': 'sad',
 
-    # Or direct mapping for simpler datasets
-    'angry': 'angry',
-    'happy': 'happy',
-    'sad': 'sad',
-    'neutral': 'neutral',
+    # Direct mapping
     'frustrated': 'frustrated',
     'satisfied': 'satisfied',
 }
 
 # ============================================================================
-# TRAINING FUNCTIONS
+# DATASET LOADING
 # ============================================================================
-
 
 def load_dataset_from_folder(audio_folder, label_mapping=None):
     """
@@ -70,23 +65,9 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
     audio_folder/
         angry/
             file1.wav
-            file2.wav
         happy/
             file1.wav
-            file2.wav
         etc.
-
-    Supports datasets like RAVDESS, TESS, CREMA-D, and custom labeled folders.
-    For RAVDESS: use emotion codes (01, 02, etc.) as folder names.
-    For TESS: use emotion names (angry, disgust, fear, happy, neutral, pleasant_surprise, sad).
-    For CREMA-D: use emotion codes (ANG, DIS, FEA, HAP, NEU, SAD).
-
-    Args:
-        audio_folder (str): Path to folder containing emotion subfolders
-        label_mapping (dict): Optional mapping to rename labels (uses EMOTION_MAPPING if None)
-
-    Returns:
-        list: List of (audio_path, emotion_label) tuples
     """
     print(f"\n{'='*70}")
     print(f"Loading Dataset from Folder: {audio_folder}")
@@ -95,17 +76,14 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
     audio_folder = Path(audio_folder)
     dataset = []
 
-    # Supported audio formats
     audio_extensions = ['.wav', '.mp3', '.m4a', '.flac', '.ogg']
 
-    # Scan for emotion folders
     for emotion_folder in audio_folder.iterdir():
         if emotion_folder.is_dir():
             raw_name = emotion_folder.name.strip()
             lower_name = raw_name.lower()
             upper_name = raw_name.upper()
 
-            # use global mapping if not provided
             if label_mapping is None:
                 label_mapping = EMOTION_MAPPING
 
@@ -120,7 +98,6 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
 
             print(f"📁 Scanning {raw_name} folder → Label: {emotion_label}")
 
-            # Find all audio files
             audio_files = []
             for ext in audio_extensions:
                 audio_files.extend(emotion_folder.glob(f'*{ext}'))
@@ -133,7 +110,6 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
     print(f"\n✅ Total files loaded: {len(dataset)}")
     print(f"📊 Emotion distribution:")
 
-    # Count emotions
     emotion_counts = {}
     for _, emotion in dataset:
         emotion_counts[emotion] = emotion_counts.get(emotion, 0) + 1
@@ -144,16 +120,14 @@ def load_dataset_from_folder(audio_folder, label_mapping=None):
     return dataset
 
 
+# ============================================================================
+# FEATURE EXTRACTION
+# ============================================================================
+
 def extract_features_from_dataset(dataset, feature_extractor):
     """
-    Extract MFCC features from all audio files in dataset
-
-    Args:
-        dataset (list): List of (audio_path, label) tuples
-        feature_extractor (MFCCFeatureExtractor): MFCC extractor
-
-    Returns:
-        tuple: (features_array, labels_array)
+    Extract MFCC features from all audio files in dataset.
+    Returns (features_array, labels_array).
     """
     print(f"\n{'='*70}")
     print(f"Extracting MFCC Features")
@@ -168,15 +142,12 @@ def extract_features_from_dataset(dataset, feature_extractor):
             print(f"Progress: {i+1}/{len(dataset)} files processed...")
 
         try:
-            # Extract features
             features = feature_extractor.extract_features(audio_path)
-
             if features is not None:
                 features_list.append(features)
                 labels_list.append(label)
             else:
                 failed_count += 1
-
         except Exception as e:
             print(f"⚠️  Error processing {audio_path}: {e}")
             failed_count += 1
@@ -186,7 +157,6 @@ def extract_features_from_dataset(dataset, feature_extractor):
     print(f"   Successful: {len(features_list)}")
     print(f"   Failed: {failed_count}")
 
-    # Convert to numpy arrays
     X = np.array(features_list)
     y = np.array(labels_list)
 
@@ -197,96 +167,146 @@ def extract_features_from_dataset(dataset, feature_extractor):
     return X, y
 
 
+# ============================================================================
+# BALANCING
+# ============================================================================
+
+def balance_dataset(X, y):
+    """
+    Balance classes by:
+    - Undersampling classes above the median count
+    - Oversampling classes below the median count
+    Returns balanced (X, y).
+    """
+    print(f"\n{'='*70}")
+    print("Balancing Dataset")
+    print(f"{'='*70}\n")
+
+    print("📊 Class distribution BEFORE balancing:")
+    unique, counts = np.unique(y, return_counts=True)
+    for emotion, count in zip(unique, counts):
+        print(f"   {emotion}: {count}")
+
+    indices_by_class = defaultdict(list)
+    for i, label in enumerate(y):
+        indices_by_class[label].append(i)
+
+    # Use median as target so we don't lose too much data from majority classes
+    target_count = int(np.median([len(v) for v in indices_by_class.values()]))
+    print(f"\n🎯 Target samples per class: {target_count}")
+
+    balanced_indices = []
+    for label, indices in indices_by_class.items():
+        if len(indices) >= target_count:
+            # Undersample
+            chosen = np.random.choice(indices, target_count, replace=False)
+        else:
+            # Oversample minority class
+            chosen = np.random.choice(indices, target_count, replace=True)
+        balanced_indices.extend(chosen)
+
+    np.random.shuffle(balanced_indices)
+    X_balanced = X[balanced_indices]
+    y_balanced = y[balanced_indices]
+
+    print("\n📊 Class distribution AFTER balancing:")
+    unique2, counts2 = np.unique(y_balanced, return_counts=True)
+    for emotion, count in zip(unique2, counts2):
+        print(f"   {emotion}: {count}")
+
+    return X_balanced, y_balanced
+
+
+# ============================================================================
+# TRAINING
+# ============================================================================
+
 def train_and_save_model(X, y, classifier_type='svm', save_path='models/'):
     """
-    Train emotion classifier and save it
-
-    Args:
-        X (np.array): Feature matrix
-        y (np.array): Labels
-        classifier_type (str): 'svm', 'rf', or 'knn'
-        save_path (str): Directory to save model
-
-    Returns:
-        EmotionClassifier: Trained classifier
+    Balance data, train emotion classifier, and save it.
+    Returns (classifier, training_history).
     """
     print(f"\n{'='*70}")
     print(f"Training {classifier_type.upper()} Classifier")
     print(f"{'='*70}\n")
 
-    # Create classifier
+    # Balance before training
+    X, y = balance_dataset(X, y)
+
+    # Create and train classifier
     classifier = EmotionClassifier(classifier_type=classifier_type)
 
-    # Train
     classifier.train(
-    X, y,
-    test_size=0.2,
-    C=50,
-    gamma=0.01,
-    kernel='rbf'
-)
+        X, y,
+        test_size=0.2,
+        C=10,           # was 50 — reduced to prevent overfitting to majority class
+        gamma='scale',  # was 0.01 — let sklearn auto-tune based on feature variance
+        kernel='rbf'
+    )
 
     # Save model
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
 
     model_file = save_path / f'{classifier_type}_emotion_model.pkl'
-    classifier.save_model(str(model_file))
 
+    # Backup existing model if present
+    if model_file.exists():
+        backup_file = save_path / f'{classifier_type}_emotion_model_backup.pkl'
+        import shutil
+        shutil.copy(str(model_file), str(backup_file))
+        print(f"📦 Backup saved to: {backup_file}")
+
+    classifier.save_model(str(model_file))
     print(f"\n✅ Model saved to: {model_file}")
 
-    return classifier, results
+    history = getattr(classifier, 'training_history', {})
+    return classifier, history
 
 
 # ============================================================================
-# QUICK START: CREATE SAMPLE TRAINING DATA
+# SAMPLE DATA GENERATOR (for testing only)
 # ============================================================================
 
 def create_sample_training_data():
     """
-    Create a small sample dataset for testing
-    This generates synthetic emotional audio samples
+    Create a small synthetic dataset for testing the pipeline.
+    NOT suitable for real emotion recognition.
     """
     print(f"\n{'='*70}")
     print("Creating Sample Training Data")
     print(f"{'='*70}\n")
 
-    import librosa
     import soundfile as sf
 
-    # Create sample data folder
     sample_folder = Path("sample_training_data")
-
     emotions = ['angry', 'happy', 'sad', 'neutral', 'frustrated', 'satisfied']
 
     for emotion in emotions:
         emotion_folder = sample_folder / emotion
         emotion_folder.mkdir(parents=True, exist_ok=True)
 
-        # Generate 5 sample audio files per emotion
         for i in range(5):
-            # Generate synthetic audio (simple sine waves with variations)
-            duration = 3  # seconds
+            duration = 3
             sr = 22050
 
-            # Different frequency ranges for different emotions (just for demo)
             if emotion == 'angry':
                 freq = np.random.randint(300, 400)
             elif emotion == 'happy':
                 freq = np.random.randint(400, 500)
             elif emotion == 'sad':
                 freq = np.random.randint(150, 250)
+            elif emotion == 'frustrated':
+                freq = np.random.randint(280, 380)
+            elif emotion == 'satisfied':
+                freq = np.random.randint(350, 450)
             else:
                 freq = np.random.randint(250, 350)
 
-            # Generate tone
             t = np.linspace(0, duration, int(sr * duration))
             audio = 0.3 * np.sin(2 * np.pi * freq * t)
-
-            # Add some noise
             audio += 0.05 * np.random.randn(len(audio))
 
-            # Save
             filename = emotion_folder / f"{emotion}_sample_{i+1}.wav"
             sf.write(filename, audio, sr)
 
@@ -300,17 +320,14 @@ def create_sample_training_data():
 
 
 # ============================================================================
-# MAIN TRAINING SCRIPT
+# MAIN
 # ============================================================================
 
 def main():
-    """Main training function"""
-
     print(f"\n{'='*70}")
     print("CSR EMOTION RECOGNITION - MODEL TRAINING")
     print(f"{'='*70}\n")
 
-    # Ask user what they want to do
     print("Options:")
     print("1. Create sample training data (for testing)")
     print("2. Train from existing dataset folder")
@@ -319,16 +336,14 @@ def main():
     choice = input("\nEnter your choice (1/2/3): ").strip()
 
     if choice == '1':
-        # Create sample data
         data_folder = create_sample_training_data()
         print("\nNow training on sample data...")
 
     elif choice == '2':
-        # Use existing folder
-        print(
-            "\nSupported datasets: RAVDESS, TESS, CREMA-D, or any custom folder structure")
-        print("Folder should contain subfolders named with emotion labels (e.g., angry/, happy/, etc.)")
-        data_folder = input("\nEnter path to your dataset folder: ").strip()
+        print("\nSupported datasets: RAVDESS, TESS, CREMA-D, or any custom folder structure")
+        print("Folder should contain subfolders named with emotion labels")
+        print("(e.g., angry/, happy/, sad/, neutral/, frustrated/, satisfied/)\n")
+        data_folder = input("Enter path to your dataset folder: ").strip()
 
         if not os.path.exists(data_folder):
             print(f"❌ Error: Folder '{data_folder}' not found!")
@@ -360,7 +375,7 @@ def main():
         print("❌ No features extracted! Check your audio files.")
         return
 
-    # Train models
+    # Choose classifier
     print("\nWhich classifier would you like to train?")
     print("1. SVM (Support Vector Machine) - Recommended")
     print("2. Random Forest")
@@ -382,96 +397,89 @@ def main():
         print("Invalid choice, training SVM by default")
         classifiers_to_train = ['svm']
 
-    # Train each classifier
+    # Train
     results_summary = []
     for clf_type in classifiers_to_train:
-        classifier, results = train_and_save_model(
-            X, y, classifier_type=clf_type)
+        classifier, history = train_and_save_model(X, y, classifier_type=clf_type)
+        accuracy = history.get('test_accuracy', 0) if isinstance(history, dict) else 0
         results_summary.append({
             'type': clf_type,
-            'accuracy': results['accuracy'],
-            'training_samples': len(X)
+            'accuracy': accuracy,
+            'training_samples': len(X),
         })
 
-    # Print summary
+    # Summary
     print(f"\n{'='*70}")
     print("TRAINING COMPLETE!")
     print(f"{'='*70}\n")
 
     for result in results_summary:
-        print(f"{result['type'].upper()}: Accuracy = {result['accuracy']:.2%} "
-              f"(trained on {result['training_samples']} samples)")
+        print(
+            f"{result['type'].upper()}: Accuracy = {result['accuracy']:.2%} "
+            f"(trained on {result['training_samples']} samples)"
+        )
 
     print(f"\n✅ Models saved in: models/")
-    print(f"\n🔄 Restart your backend server to use the trained models!")
-    print(f"   The system will automatically load the trained models.")
+    print(f"\n🔄 Restart your backend server to load the new models!")
 
+
+# ============================================================================
+# WRAPPER FOR EXTERNAL USE
+# ============================================================================
 
 def train_from_labeled_recordings(data_folder, classifiers_to_train=None):
     """
-    Train emotion recognition models from labeled dataset folder
-    This is a wrapper function for use by setup scripts
-
-    Args:
-        data_folder (str): Path to folder containing emotion subfolders
-        classifiers_to_train (list): List of classifier types to train ['svm', 'rf', 'knn']
-                                      If None, trains all three
-
-    Returns:
-        dict: Training results summary
+    Train emotion recognition models from labeled dataset folder.
+    Used by setup scripts.
     """
     print(f"\n{'='*70}")
     print("TRAINING EMOTION RECOGNITION MODELS")
     print(f"{'='*70}\n")
 
     if classifiers_to_train is None:
-        classifiers_to_train = ['svm', 'rf', 'knn']
+        classifiers_to_train = ['svm']
 
     if not os.path.exists(data_folder):
         print(f"❌ Error: Folder '{data_folder}' not found!")
         return None
 
-    # Load dataset
     dataset = load_dataset_from_folder(data_folder)
 
     if len(dataset) == 0:
-        print("❌ No audio files found! Please check your dataset structure.")
+        print("❌ No audio files found!")
         return None
 
-    # Initialize feature extractor
     print("\nInitializing MFCC Feature Extractor...")
     feature_extractor = MFCCFeatureExtractor()
 
-    # Extract features
     X, y = extract_features_from_dataset(dataset, feature_extractor)
 
     if len(X) == 0:
-        print("❌ No features extracted! Check your audio files.")
+        print("❌ No features extracted!")
         return None
 
-    # Train each classifier
     results_summary = []
     for clf_type in classifiers_to_train:
-        classifier, results = train_and_save_model(
-            X, y, classifier_type=clf_type)
+        classifier, history = train_and_save_model(X, y, classifier_type=clf_type)
+        accuracy = history.get('test_accuracy', 0) if isinstance(history, dict) else 0
         results_summary.append({
             'type': clf_type,
-            'accuracy': results['accuracy'],
-            'training_samples': len(X)
+            'accuracy': accuracy,
+            'training_samples': len(X),
         })
 
-    # Print summary
     print(f"\n{'='*70}")
     print("TRAINING COMPLETE!")
     print(f"{'='*70}\n")
 
     for result in results_summary:
-        print(f"{result['type'].upper()}: Accuracy = {result['accuracy']:.2%} "
-              f"(trained on {result['training_samples']} samples)")
+        print(
+            f"{result['type'].upper()}: Accuracy = {result['accuracy']:.2%} "
+            f"(trained on {result['training_samples']} samples)"
+        )
 
     print(f"\n✅ Models saved in: models/")
-    print(f"\n🔄 Restart your backend server to use the trained models!")
-    print(f"   The system will automatically load the trained models.")
+    print(f"\n🔄 Restart your backend server to load the new models!")
 
     return results_summary
 

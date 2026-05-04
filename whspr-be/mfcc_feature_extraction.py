@@ -273,6 +273,7 @@ class MFCCFeatureExtractor:
 
         # Tempo estimation
         tempo, beats = librosa.beat.beat_track(y=audio, sr=sr)
+        tempo = float(np.asarray(tempo).flat[0])
 
         # Energy contour
         energy = librosa.feature.rms(
@@ -365,7 +366,13 @@ class MFCCFeatureExtractor:
             audio, sr = librosa.load(audio_path, sr=self.sample_rate, mono=True)
 
             audio, _ = librosa.effects.trim(audio, top_db=25)
-            audio = librosa.util.normalize(audio)
+
+            # Guard against silent / empty audio after trimming
+            if len(audio) == 0 or np.max(np.abs(audio)) < 1e-6:
+                print(f"⚠️  Audio is silent or empty after trim: {audio_path}", flush=True)
+                audio = np.zeros(int(self.sample_rate * 5), dtype=np.float32)
+            else:
+                audio = librosa.util.normalize(audio)
 
             TARGET_DURATION = 5
 
@@ -373,6 +380,9 @@ class MFCCFeatureExtractor:
                 audio = audio[:sr * TARGET_DURATION]
             else:
                 audio = np.pad(audio, (0, max(0, sr * TARGET_DURATION - len(audio))))
+
+            # Replace any NaN/Inf that survived
+            audio = np.nan_to_num(audio, nan=0.0, posinf=0.0, neginf=0.0)
 
             # Extract MFCC features
             mfcc_features = self.extract_mfcc(audio, sr)
@@ -391,7 +401,9 @@ class MFCCFeatureExtractor:
             return feature_vector
 
         except Exception as e:
-            print(f"Error extracting features from {audio_path}: {e}")
+            import traceback
+            print(f"Error extracting features from {audio_path}: {e}", flush=True)
+            traceback.print_exc()
             return None
 
     def extract_all_features(self, audio_path):

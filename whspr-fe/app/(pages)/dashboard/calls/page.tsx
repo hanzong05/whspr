@@ -81,6 +81,23 @@ const emotionColor: Record<string, string> = {
   satisfied: "text-green-600",
 };
 
+const actionBadge: Record<string, string> = {
+  ESCALATE: "bg-red-100 text-red-700",
+  FLAGGED: "bg-red-100 text-red-700",
+  CANCEL_ORDER: "bg-orange-100 text-orange-700",
+  REPORTED_ISSUE: "bg-blue-100 text-blue-700",
+  FOLLOW_UP: "bg-yellow-100 text-yellow-700",
+  NONE: "bg-gray-100 text-gray-500",
+};
+
+function fmtAction(action: string | null | undefined): string {
+  if (!action || action === "NONE") return "";
+  return action
+    .split("_")
+    .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+    .join(" ");
+}
+
 function fmt(s: string) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
@@ -1100,9 +1117,18 @@ export default function CallsPage() {
             )}
             {viewTarget.recommendation && (
               <div className="bg-blue-50 border border-blue-100 rounded-xl p-4">
-                <p className="text-xs font-medium text-blue-500 mb-1">
+                <p className="text-xs font-medium text-blue-500 mb-2">
                   Recommendation
                 </p>
+                {viewTarget.recommendation.action && viewTarget.recommendation.action !== "NONE" && (
+                  <span
+                    className={`inline-flex px-2.5 py-1 rounded-full text-xs font-semibold mb-2 ${
+                      actionBadge[viewTarget.recommendation.action] ?? "bg-gray-100 text-gray-500"
+                    }`}
+                  >
+                    {fmtAction(viewTarget.recommendation.action)}
+                  </span>
+                )}
                 <p className="text-sm text-blue-800">
                   {viewTarget.recommendation.recommended_tone ??
                     viewTarget.recommendation.reason ??
@@ -1466,11 +1492,26 @@ export default function CallsPage() {
 
                   {/* Recommendation */}
                   <td className="px-5 py-4 max-w-48">
-                    <span className="text-sm text-gray-600 line-clamp-1">
-                      {call.recommendation?.recommended_tone ??
-                        call.recommendation?.reason ??
-                        "—"}
-                    </span>
+                    {call.recommendation ? (
+                      <div className="flex flex-col gap-1">
+                        {call.recommendation.action && call.recommendation.action !== "NONE" && (
+                          <span
+                            className={`inline-flex w-fit px-2 py-0.5 rounded-full text-xs font-semibold ${
+                              actionBadge[call.recommendation.action] ?? "bg-gray-100 text-gray-500"
+                            }`}
+                          >
+                            {fmtAction(call.recommendation.action)}
+                          </span>
+                        )}
+                        <span className="text-xs text-gray-500 line-clamp-1">
+                          {call.recommendation.recommended_tone ??
+                            call.recommendation.reason ??
+                            ""}
+                        </span>
+                      </div>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
                   </td>
 
                   {/* Actions */}

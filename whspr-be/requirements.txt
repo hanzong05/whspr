@@ -23,8 +23,11 @@ seaborn>=0.13
 
 # Database
 sqlalchemy>=2.0
-pymysql>=1.1.0
-cryptography>=42.0
+psycopg2-binary>=2.9
+supabase>=2.4.0
+
+# Audio conversion
+pydub>=0.25.1
 
 # Auth / Password hashing
 passlib[bcrypt]>=1.7.4

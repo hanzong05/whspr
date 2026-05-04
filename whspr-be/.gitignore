@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+uploads/
+outputs/
+*.wav
+*.mp3
+*.webm
+"README copy.md"
