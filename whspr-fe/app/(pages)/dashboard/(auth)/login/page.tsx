@@ -284,12 +284,7 @@ export default function LoginPage() {
                 <label className="text-xs font-semibold text-gray-600 tracking-wide">
                   Password
                 </label>
-                <button
-                  type="button"
-                  className="text-xs text-red-500 hover:text-red-600 font-medium transition-colors"
-                >
-                  Forgot password?
-                </button>
+
               </div>
               <div className="relative">
                 <svg
@@ -381,11 +376,10 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading}
-              className={`w-full py-3 rounded-xl text-sm font-semibold text-white transition-all duration-200 mt-1 shadow-sm ${
-                loading
-                  ? "bg-red-300 cursor-not-allowed"
-                  : "bg-red-500 hover:bg-red-600 hover:shadow-md hover:shadow-red-200 active:scale-[0.98]"
-              }`}
+              className={`w-full py-3 rounded-xl text-sm font-semibold text-white transition-all duration-200 mt-1 shadow-sm ${loading
+                ? "bg-red-300 cursor-not-allowed"
+                : "bg-red-500 hover:bg-red-600 hover:shadow-md hover:shadow-red-200 active:scale-[0.98]"
+                }`}
             >
               {loading ? (
                 <span className="flex items-center justify-center gap-2">

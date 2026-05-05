@@ -208,12 +208,7 @@ export default function Header({ onExposeOpenLogin }: HeaderProps) {
                 <label className="text-xs font-semibold text-gray-600 tracking-wide">
                   Password
                 </label>
-                <button
-                  type="button"
-                  className="text-xs text-red-500 hover:text-red-600 font-medium transition-colors"
-                >
-                  Forgot password?
-                </button>
+
               </div>
               <div className="relative">
                 <svg
